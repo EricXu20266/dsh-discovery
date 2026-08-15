@@ -45,7 +45,7 @@ dsh-discovery 自身保持严格的只读边界：不安装、不更新、不卸
 - **官方/第三方标记**：`deepseek-ai` 官方蓝底 vs 社区描边
 - **已安装标识**：读 profile manifest bundles，区分内置与用户安装
 - **LLM 审查安装**：一键生成审查 prompt 交 LLM（读源码/查依赖/识别恶意模式），通过则装、有风险则停；内置 Markdown 渲染器预览 README + GitHub 外链
-- **检查更新**：已安装插件生成更新检查 prompt 交 LLM 对比版本、审查 changelog
+- **检查更新**：已安装插件生成更新检查 prompt 交 LLM——对比版本、审查 changelog，**更新前同样执行安全审查**（对比新旧依赖/代码/权限变更，警惕供应链投毒，通过才 `dsh plugin update`，有风险则停止）
 - **listing 缓存**：服务端 5 分钟 TTL（`?force=1` 强制刷新）+ 客户端 sessionStorage 10 分钟
 - **i18n**：zh / en 双语界面
 
