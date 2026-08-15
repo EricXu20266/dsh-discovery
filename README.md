@@ -1,5 +1,7 @@
 # dsh-discovery
 
+> 🌐 **中文 | [English](README.en.md)**
+
 DSH 社区插件搜索器（DSH plugin discovery browser）——浏览与检索 DeepSeek Harness 社区插件的只读工具。
 
 > **核心定位：LLM 审计安装（LLM-audited install）。** DHS 目前没有官方插件市场，任何第三方插件本质上都是「可执行代码」。因此本工具刻意做成**只读**：它只负责发现、筛选、检索插件；**安全审查交由 LLM（DHS 的 agent）完成**——利用 LLM 的代码理解与安全分析能力，读源码、查依赖、识别恶意模式，审查通过才执行安装。
