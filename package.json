@@ -51,7 +51,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "bundle:client": "tsdown",
-    "prepare": "npm run build && npm run bundle:client"
+    "prepare": "node scripts/prepare.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
