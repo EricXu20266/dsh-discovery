@@ -12,6 +12,11 @@ import { mountDiscoveryRoutes, type DiscoveryHost } from './routes.ts'
 
 export const name = 'dsh-discovery'
 
+/** Minimal host-plane systemPrompt service face (avoids a hard dep on @deepseek-ai/dsh-system-prompt). */
+interface SystemPromptFace {
+  section(section: { name: string; order: number; text: string }): () => void
+}
+
 /** 内置 bundle 插件（非用户安装），已安装标识中排除。 */
 const BUILTIN_PLUGINS = new Set([
   '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-headless',
@@ -37,6 +42,11 @@ function listInstalledPlugins(): string[] {
 }
 
 export function apply(ctx: Context): void {
+  ctx.inject(['systemPrompt'], (sysCtx: Context) => (sysCtx as unknown as { systemPrompt: SystemPromptFace }).systemPrompt.section({
+    name: 'plugin:dsh-discovery',
+    order: 900,
+    text: 'Installed plugin: dsh-discovery (sidebar 插件搜索 panel). Browses community DSH plugins from the GitHub dsh-plugin topic; installation itself is left to the user or the agent.',
+  }))
   ctx.inject(['webServer', 'loader'], (hostCtx: Context) => {
     const host = hostCtx as unknown as DiscoveryHost
     host.effect(() => mountDiscoveryRoutes(host, listInstalledPlugins), 'dsh-discovery: http routes')
