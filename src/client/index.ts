@@ -145,6 +145,10 @@ const catOnStyle: React.CSSProperties = {
   color: 'var(--dsw-alias-brand-primary, #7aa2ff)', fontWeight: 600,
 }
 const gridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }
+const onlineNoteStyle: React.CSSProperties = {
+  fontSize: 11, lineHeight: '16px', color: 'var(--dsw-alias-label-secondary, #7c7c9c)',
+  background: 'var(--dsw-alias-bg-layer-2, #1c1c2e)', borderRadius: 8, padding: '6px 12px', marginBottom: 12,
+}
 const cardStyle: React.CSSProperties = {
   background: 'var(--dsw-alias-bg-layer-1, #1a1a2b)',
   border: '1px solid var(--dsw-alias-border-l2, #2e2e4a)', borderRadius: 12, padding: '14px 16px',
@@ -595,6 +599,9 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('all')
   const [preview, setPreview] = useState<PluginEntry | null>(null)
+  /** GitHub 全文搜索兜底：本地过滤无结果时触发。null=未搜索；[]=已搜无结果。 */
+  const [searchResults, setSearchResults] = useState<PluginEntry[] | null>(null)
+  const [searching, setSearching] = useState(false)
 
   const load = (): void => {
     setLoadError(false)
@@ -631,6 +638,47 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
 
   const cats = useMemo(() => orderedCategories(listing), [listing])
   const plugins = useMemo(() => filterPlugins(listing, { q, cat }), [listing, q, cat])
+
+  // GitHub 全文搜索兜底：本地 topic 列表过滤无结果时，防抖触发在线搜索
+  // （GitHub topic 索引对新仓库有延迟，搜名字也搜不到，需走全文搜索）。
+  const searchTimer = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const term = q.trim()
+    if (term === '' || plugins.length > 0) {
+      window.clearTimeout(searchTimer.current)
+      setSearchResults(null)
+      setSearching(false)
+      return
+    }
+    setSearching(true)
+    window.clearTimeout(searchTimer.current)
+    searchTimer.current = window.setTimeout(() => {
+      fetch(`/dsh-discovery/search?q=${encodeURIComponent(term)}`, { cache: 'no-store' })
+        .then((res) => { if (!res.ok) throw new Error('HTTP ' + String(res.status)); return res.json() })
+        .then((body: { plugins: PluginEntry[] }) => setSearchResults(body.plugins ?? []))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false))
+    }, 400)
+    return () => window.clearTimeout(searchTimer.current)
+    // plugins.length 而非 plugins：避免每次过滤重算（新数组引用）都触发
+  }, [q, cat, plugins.length])
+
+  // 本地无结果时的兜底视图：在线搜索中 / 搜索结果 / 确认无结果
+  const fallbackView: ReactNode = plugins.length === 0 && q.trim() !== ''
+    ? (searching
+        ? h('div', { style: loadingStyle }, t('searchingOnline'))
+        : (searchResults !== null && searchResults.length > 0
+            ? h('div', { style: { width: '100%' } },
+                h('div', { style: onlineNoteStyle }, t('searchOnlineResults').replace('{n}', String(searchResults.length))),
+                h('div', { style: gridStyle },
+                  searchResults.map((p) => h(PluginCard, {
+                    key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed),
+                    onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
+                  })),
+                ),
+              )
+            : h('div', { style: emptyStyle }, t('empty'))))
+    : null
 
   const handleReview = (plugin: PluginEntry): void => {
     onClose()
@@ -683,13 +731,14 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
       h('div', { style: bodyStyle, flex: 1 },
         loadError && h('div', { style: emptyStyle }, t('loadFail') + ' — ' + t('refresh')),
         !loadError && listing === null && h('div', { style: loadingStyle }, t('loading')),
-        !loadError && listing !== null && plugins.length === 0 && h('div', { style: emptyStyle }, t('empty')),
         !loadError && listing !== null && plugins.length > 0 && h('div', { style: gridStyle },
           plugins.map((p) => h(PluginCard, {
             key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed),
             onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
           })),
         ),
+        !loadError && listing !== null && fallbackView,
+        !loadError && listing !== null && plugins.length === 0 && q.trim() === '' && h('div', { style: emptyStyle }, t('empty')),
       ),
     ),
     tab === 'scenario' && h(ScenarioPanel, { listing, t, onInstall: handleInstall, onCustom: handleCustom }),

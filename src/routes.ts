@@ -7,6 +7,11 @@
  * serves the listing to the browser UI. Opening a repository happens in the
  * browser (external link); installing is done by the user or the host agent
  * with `dsh plugin add <spec>` after reviewing the repo.
+ *
+ * Search fallback: GitHub's topic index lags for brand-new repositories (a
+ * `dsh-plugin` topic can take hours to days to appear in topic search). The
+ * `/dsh-discovery/search` route proxies GitHub's full-text repository search
+ * (name/description/README) so fresh plugins are still discoverable by name.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -113,6 +118,51 @@ export async function fetchListing(): Promise<PluginListing> {
 /** Drop the cache (not used by the UI yet, but harmless to expose). */
 export function invalidateListing(): void {
   cache = { at: 0, data: null }
+}
+
+/* ── GitHub full-text search fallback ─────────────────────────────────────── */
+
+/** 全文搜索缓存：关键词 → 结果（null = 查询失败）。TTL 防未认证 API 限流（60 req/h）。 */
+const searchCache = new Map<string, { at: number; data: PluginEntry[] | null }>()
+const SEARCH_TTL_MS = 5 * 60 * 1000
+
+/**
+ * GitHub 全文搜索兜底：topic 列表索引对新仓库有延迟（topic 已打但未收录），
+ * 本地过滤无结果时走 search API 全文匹配 name/description/readme。
+ * 不限定 topic，才能命中最新仓库。失败返回 null（区别于"无结果"的 []）。
+ */
+async function fetchSearch(q: string): Promise<PluginEntry[] | null> {
+  const key = q.trim().toLowerCase()
+  if (key === '') return []
+  const cached = searchCache.get(key)
+  if (cached !== undefined && Date.now() - cached.at < SEARCH_TTL_MS) return cached.data
+  const url = `${GITHUB_API}/search/repositories?q=${encodeURIComponent(key)}&per_page=30&sort=stars&order=desc`
+  try {
+    const res = await fetch(url, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'dsh-discovery',
+      },
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`)
+    const body = (await res.json()) as { items?: GitHubRepo[] }
+    const plugins: PluginEntry[] = (body.items ?? []).map((repo) => ({
+      name: repo.full_name.split('/')[1] ?? repo.full_name,
+      owner: repo.full_name.split('/')[0] ?? '',
+      description: repo.description ?? '',
+      stars: repo.stargazers_count,
+      language: repo.language,
+      updatedAt: repo.updated_at,
+      htmlUrl: repo.html_url,
+      topics: repo.topics ?? [],
+    }))
+    searchCache.set(key, { at: Date.now(), data: plugins })
+    return plugins
+  } catch {
+    searchCache.set(key, { at: Date.now(), data: null })
+    return null
+  }
 }
 
 /* ── installed versions (code-side comparison for one-click update) ───────── */
@@ -242,6 +292,30 @@ export function mountDiscoveryRoutes(host: DiscoveryHost, listInstalled: () => s
       path: '/dsh-discovery/installed',
       handler: async (_request, response) => {
         sendJson(response, 200, { installed: listInstalled() })
+      },
+    }),
+    host.webServer.register({
+      kind: 'exact',
+      path: '/dsh-discovery/search',
+      handler: async (request, response) => {
+        try {
+          const url = new URL(request.url ?? '', 'http://localhost')
+          const q = url.searchParams.get('q') ?? ''
+          if (q.trim() === '') {
+            sendJson(response, 400, { error: 'q is required' })
+            return
+          }
+          const plugins = await fetchSearch(q)
+          if (plugins === null) {
+            sendJson(response, 502, { error: 'GitHub search unavailable' })
+            return
+          }
+          sendJson(response, 200, { plugins, source: 'search' })
+        } catch (error) {
+          sendJson(response, 500, {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       },
     }),
     host.webServer.register({
