@@ -663,22 +663,7 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
     // plugins.length 而非 plugins：避免每次过滤重算（新数组引用）都触发
   }, [q, cat, plugins.length])
 
-  // 本地无结果时的兜底视图：在线搜索中 / 搜索结果 / 确认无结果
-  const fallbackView: ReactNode = plugins.length === 0 && q.trim() !== ''
-    ? (searching
-        ? h('div', { style: loadingStyle }, t('searchingOnline'))
-        : (searchResults !== null && searchResults.length > 0
-            ? h('div', { style: { width: '100%' } },
-                h('div', { style: onlineNoteStyle }, t('searchOnlineResults').replace('{n}', String(searchResults.length))),
-                h('div', { style: gridStyle },
-                  searchResults.map((p) => h(PluginCard, {
-                    key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed),
-                    onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
-                  })),
-                ),
-              )
-            : h('div', { style: emptyStyle }, t('empty'))))
-    : null
+  // 本地无结果时的兜底视图（定义在 handler 之后，见下方 fallbackView）
 
   const handleReview = (plugin: PluginEntry): void => {
     onClose()
@@ -702,6 +687,24 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
     onClose()
     void openSessionAndSend(ctx, buildBulkUpdatePrompt(updates, t))
   }
+
+  // 本地无结果时的兜底视图：在线搜索中 / 搜索结果 / 确认无结果
+  // ⚠️ 必须定义在 handler 之后：引用了 handleReview，提前定义触发 TDZ（ReferenceError）
+  const fallbackView: ReactNode = plugins.length === 0 && q.trim() !== ''
+    ? (searching
+        ? h('div', { style: loadingStyle }, t('searchingOnline'))
+        : (searchResults !== null && searchResults.length > 0
+            ? h('div', { style: { width: '100%' } },
+                h('div', { style: onlineNoteStyle }, t('searchOnlineResults').replace('{n}', String(searchResults.length))),
+                h('div', { style: gridStyle },
+                  searchResults.map((p) => h(PluginCard, {
+                    key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed),
+                    onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
+                  })),
+                ),
+              )
+            : h('div', { style: emptyStyle }, t('empty'))))
+    : null
 
   return h('div', { style: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 } },
     h('div', { style: tabRowStyle },
