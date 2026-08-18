@@ -778,7 +778,7 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
       ),
     ),
     tab === 'scenario' && h(ScenarioPanel, { listing, t, onInstall: handleInstall, onCustom: handleCustom }),
-    tab === 'installed' && h(InstalledPanel, { t, versions: installedVersions, onUpdateAll: handleUpdateAll, onViewRepo: (v) => setPreview(toPluginEntry(v)) }),
+    tab === 'installed' && h(InstalledPanel, { t, versions: installedVersions, onUpdateAll: handleUpdateAll, onViewRepo: (v) => setPreview(toPluginEntry(v)), onCheckUpdate: (v) => handleCheckUpdate(toPluginEntry(v)) }),
     preview !== null && h(RepoPreview, { plugin: preview, t, onClose: () => setPreview(null) }),
     toast !== null && h('div', { style: toastStyle }, toast),
   )
@@ -800,11 +800,12 @@ function toPluginEntry(v: InstalledVersion): PluginEntry {
 }
 
 /** 已安装 tab：顶部紧凑一键更新 + 卡片式插件列表（npm + GitHub 多源比对结果）。 */
-function InstalledPanel({ t, versions, onUpdateAll, onViewRepo }: {
+function InstalledPanel({ t, versions, onUpdateAll, onViewRepo, onCheckUpdate }: {
   t: Translate
   versions: InstalledVersion[] | null
   onUpdateAll: () => void
   onViewRepo: (version: InstalledVersion) => void
+  onCheckUpdate: (version: InstalledVersion) => void
 }) {
   const updatable = (versions ?? []).filter((p) => p.hasUpdate)
 
@@ -875,6 +876,7 @@ function InstalledPanel({ t, versions, onUpdateAll, onViewRepo }: {
           h('div', { style: metaStyle }, metaLine(p)),
           h('div', { style: cardFooterStyle },
             h('div', { style: cardBtnGroupStyle },
+              p.hasUpdate && h('button', { type: 'button', className: 'dshd-btn', style: cardBtnPrimaryStyle, title: t('checkUpdate'), onClick: () => onCheckUpdate(p) }, t('checkUpdate')),
               p.repo !== null && h('button', { type: 'button', className: 'dshd-btn', style: repoBtnStyle, title: t('viewRepo'), onClick: () => onViewRepo(p) }, t('viewRepo')),
             ),
           ),
