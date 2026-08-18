@@ -209,7 +209,7 @@ const cardBtnPrimaryStyle: React.CSSProperties = {
   color: 'var(--dsw-static-deepseek-500, #4176E6)',
 }
 /** Hover micro-interaction for card / scenario / header buttons (CSS class). */
-const HOVER_CSS = '.dshd-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08)) !important;border-color:var(--dsw-alias-brand-primary,#7aa2ff) !important}'
+const HOVER_CSS = '.dshd-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08)) !important;border-color:var(--dsw-alias-brand-primary,#7aa2ff) !important}.dshd-update-all:hover{background:#2f5fd0 !important;border-color:#2f5fd0 !important;color:#fff !important}'
 const tabRowStyle: React.CSSProperties = {
   display: 'flex', gap: 4, marginBottom: 12,
 }
@@ -826,7 +826,7 @@ function InstalledPanel({ t, versions, onUpdateAll, onViewRepo }: {
   return h('div', { style: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 } },
     h('div', { style: { padding: '12px 14px', borderBottom: '1px solid var(--dsw-alias-divider, #ececf2)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
       h('button', {
-        type: 'button', className: 'dshd-btn',
+        type: 'button', className: 'dshd-btn dshd-update-all',
         style: {
           ...cardBtnPrimaryStyle,
           background: '#4176e6', borderColor: '#4176e6', color: '#fff',
