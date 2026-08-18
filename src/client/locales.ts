@@ -66,6 +66,10 @@ export const zh = {
   updateLoading: '正在检查版本…',
   updateFail: '版本检查失败',
   updateEmpty: '全部插件已是最新版本',
+  repoLatest: '仓库最新提交',
+  baselineReady: '基线已建立',
+  fromNpm: 'npm',
+  fromGithub: 'GitHub',
 }
 
 export const en = {
@@ -134,4 +138,8 @@ export const en = {
   updateLoading: 'Checking versions…',
   updateFail: 'Failed to check versions',
   updateEmpty: 'All plugins are up to date',
+  repoLatest: 'Latest commit',
+  baselineReady: 'Baseline set',
+  fromNpm: 'npm',
+  fromGithub: 'GitHub',
 }

@@ -15,7 +15,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { sendJson } from './http.ts'
@@ -165,14 +165,27 @@ async function fetchSearch(q: string): Promise<PluginEntry[] | null> {
   }
 }
 
-/* ── installed versions (code-side comparison for one-click update) ───────── */
+/* ── installed versions (multi-source comparison for one-click update) ─────── */
 
 export interface InstalledVersion {
   name: string
   current: string
+  /** npm registry 最新版（插件已发布 npm 时可查，否则 null）。 */
   latest: string | null
-  /** latest 可查询且与当前版本不同（版本号语义比较由代码完成，确定性操作不交 LLM）。 */
+  /** npm 最新版发布时间（ISO，可查时）。 */
+  latestPublishedAt: string | null
+  /** GitHub 仓库 "owner/repo"（从插件 package.json repository 解析）。 */
+  repo: string | null
+  /** GitHub 远端最新 commit SHA。 */
+  remoteSha: string | null
+  /** GitHub 远端最新 commit 时间（ISO）。 */
+  remotePushedAt: string | null
+  /** 基线：上次建立/推进时记录的远端 SHA（null = 首次检查尚未建立基线）。 */
+  baselineSha: string | null
+  /** 是否检测到更新：npm latest ≠ current，或 GitHub 远端 SHA ≠ 基线 SHA（且插件本体未重装）。 */
   hasUpdate: boolean
+  /** 检测到更新的来源：'npm' | 'github' | 'none'。 */
+  source: 'npm' | 'github' | 'none'
 }
 
 /** 当前激活 profile 名（与 host 侧一致：argv --profile）。 */
@@ -181,53 +194,193 @@ function resolveProfileName(): string {
   return idx >= 0 && process.argv[idx + 1] !== undefined ? process.argv[idx + 1] : 'web'
 }
 
-/** 读已安装插件包自身 package.json 的 version（file:/github: 链接没有版本号，以包内为准）。 */
-function readInstalledVersion(pkg: string): string | null {
+/** profile 下某插件的 node_modules 路径（file:/github: 安装的插件在此为实体副本）。 */
+function profileNodeModules(pkg: string): string {
+  return join(homedir(), '.dsh', 'profiles', resolveProfileName(), 'node_modules', pkg)
+}
+
+/** 读已安装插件包自身 package.json；读不到返回 null。 */
+function readInstalledPackage(pkg: string): Record<string, unknown> | null {
   try {
-    const pkgJson = join(homedir(), '.dsh', 'profiles', resolveProfileName(), 'node_modules', pkg, 'package.json')
-    const doc = JSON.parse(readFileSync(pkgJson, 'utf8')) as { version?: string }
-    return doc.version ?? null
+    return JSON.parse(readFileSync(join(profileNodeModules(pkg), 'package.json'), 'utf8')) as Record<string, unknown>
   } catch {
     return null
   }
 }
 
-/** 查 npm registry 最新版本；非 npm 源（github: 等）或查询失败返回 null（诚实标注「无法检测」）。 */
-async function fetchLatestVersion(pkg: string): Promise<string | null> {
+/** 已安装插件 package.json 的 mtime（检测重装：file: 源更新后重装会复制新文件）。 */
+function readInstalledMtime(pkg: string): number | null {
+  try {
+    return statSync(join(profileNodeModules(pkg), 'package.json')).mtimeMs
+  } catch {
+    return null
+  }
+}
+
+/** 读已安装插件包自身 package.json 的 version（file:/github: 链接没有版本号，以包内为准）。 */
+function readInstalledVersion(pkg: string): string | null {
+  const doc = readInstalledPackage(pkg)
+  return typeof doc?.version === 'string' ? doc.version : null
+}
+
+/** 从 package.json repository 字段解析 GitHub 仓库（支持 string / {url} / git+https / ssh 格式）。 */
+function resolveRepo(pkg: string): { owner: string; repo: string } | null {
+  const doc = readInstalledPackage(pkg)
+  const repository = doc?.repository
+  const url = typeof repository === 'string'
+    ? repository
+    : (repository as { url?: string } | undefined)?.url
+  if (typeof url !== 'string') return null
+  const m = url.match(/github\.com[/:]([^/]+)\/([^/.]+)/)
+  return m !== null ? { owner: m[1], repo: m[2] } : null
+}
+
+/** 查 npm registry 最新版 + 发布时间；非 npm 源（github: 等）或查询失败返回 null（诚实标注「无法检测」）。 */
+async function fetchNpmInfo(pkg: string): Promise<{ latest: string | null; publishedAt: string | null }> {
   const encoded = pkg.startsWith('@') ? pkg.replace('/', '%2F') : pkg
   try {
-    const res = await fetch(`https://registry.npmjs.org/${encoded}/latest`, {
+    const res = await fetch(`https://registry.npmjs.org/${encoded}?fields=dist-tags,time`, {
       headers: { accept: 'application/vnd.npm.install-v1+json' },
       signal: AbortSignal.timeout(10000),
     })
-    if (!res.ok) return null
-    const body = (await res.json()) as { version?: string }
-    return body.version ?? null
+    if (!res.ok) return { latest: null, publishedAt: null }
+    const body = (await res.json()) as { 'dist-tags'?: { latest?: string }; time?: Record<string, string> }
+    const latest = body['dist-tags']?.latest ?? null
+    const publishedAt = latest !== null ? (body.time?.[latest] ?? null) : null
+    return { latest, publishedAt }
   } catch {
+    return { latest: null, publishedAt: null }
+  }
+}
+
+/** GitHub 远端最新 commit（TTL 缓存防未认证限流 60 req/h）。 */
+interface GitHubHead {
+  sha: string
+  date: string
+}
+const ghHeadCache = new Map<string, { at: number; data: GitHubHead | null }>()
+const GH_TTL_MS = 5 * 60 * 1000
+
+async function fetchGitHubHead(owner: string, repo: string): Promise<GitHubHead | null> {
+  const key = `${owner}/${repo}`
+  const cached = ghHeadCache.get(key)
+  if (cached !== undefined && Date.now() - cached.at < GH_TTL_MS) return cached.data
+  try {
+    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/commits?per_page=1`, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'dsh-discovery',
+      },
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) return null
+    const body = (await res.json()) as Array<{ sha: string; commit?: { committer?: { date?: string } } }>
+    const item = body[0]
+    const result = item !== undefined
+      ? { sha: item.sha, date: item.commit?.committer?.date ?? '' }
+      : null
+    ghHeadCache.set(key, { at: Date.now(), data: result })
+    return result
+  } catch {
+    ghHeadCache.set(key, { at: Date.now(), data: null })
     return null
+  }
+}
+
+/* ── 基线状态：记录「上次建立/推进时的远端 SHA」，SHA 变化即提示更新 ──────── */
+
+interface BaselineRecord {
+  sha: string
+  checkedAt: string
+  currentVersion: string | null
+  fileMtime: number | null
+}
+
+interface BaselineState {
+  plugins: Record<string, BaselineRecord>
+}
+
+function baselinePath(): string {
+  return join(homedir(), '.dsh', 'profiles', resolveProfileName(), 'dsh-discovery-state.json')
+}
+
+function readBaseline(): BaselineState {
+  try {
+    return JSON.parse(readFileSync(baselinePath(), 'utf8')) as BaselineState
+  } catch {
+    return { plugins: {} }
+  }
+}
+
+function writeBaseline(state: BaselineState): void {
+  try {
+    writeFileSync(baselinePath(), JSON.stringify(state, null, 2), 'utf8')
+  } catch {
+    // 状态文件写失败不影响主流程（只影响下次比对）
   }
 }
 
 /**
- * 代码侧版本比对：并行读所有已安装插件的当前版本 + 查 npm 最新版，
- * 返回带 hasUpdate 标记的清单。确定性操作（版本读取/比对）在代码完成，
- * LLM 只负责对「需更新清单」做安全审查与安装执行。
+ * 多源版本比对：npm registry（latest + 发布时间）+ GitHub 远端 commit（SHA 基线）。
+ * 确定性操作（版本读取/比对）在代码完成，LLM 只负责对「需更新清单」做安全审查与安装执行。
+ *
+ * 基线语义：
+ * - 首次检查：记录远端 SHA 为基线（不误报），UI 显示「基线已建立」。
+ * - 插件本体变化（版本号或 package.json mtime 变化 = 重装/更新过）：基线推进到当前远端 SHA。
+ * - 其余情况：远端 SHA ≠ 基线 SHA → 提示更新，基线不动（直到真正更新插件）。
  */
 export async function installedVersions(listInstalled: () => string[]): Promise<InstalledVersion[]> {
   const names = listInstalled()
-  const settled = await Promise.allSettled(names.map(async (name) => {
+  const state = readBaseline()
+  const settled = await Promise.allSettled(names.map(async (name): Promise<InstalledVersion> => {
     const current = readInstalledVersion(name)
-    const latest = await fetchLatestVersion(name)
+    const npm = await fetchNpmInfo(name)
+    const repo = resolveRepo(name)
+    const gh = repo !== null ? await fetchGitHubHead(repo.owner, repo.repo) : null
+    const record = state.plugins[name]
+    const baselineSha = record?.sha ?? null
+    const pkgMtime = readInstalledMtime(name)
+
+    // 插件本体是否变化（重装/更新过）：版本号或 package.json mtime 任一变化
+    const reinstalled = record !== undefined
+      && (record.currentVersion !== current || record.fileMtime !== pkgMtime)
+
+    let hasUpdate = false
+    let source: InstalledVersion['source'] = 'none'
+    if (npm.latest !== null && current !== null && npm.latest !== current) {
+      hasUpdate = true
+      source = 'npm'
+    }
+    if (gh !== null && baselineSha !== null && !reinstalled && gh.sha !== baselineSha) {
+      hasUpdate = true
+      source = 'github'
+    }
+
+    // 推进/建立基线：插件重装过，或首次检查
+    if (gh !== null && (record === undefined || reinstalled)) {
+      state.plugins[name] = {
+        sha: gh.sha,
+        checkedAt: new Date().toISOString(),
+        currentVersion: current,
+        fileMtime: pkgMtime,
+      }
+    }
+
     return {
       name,
       current: current ?? 'unknown',
-      latest,
-      hasUpdate: latest !== null && current !== null && latest !== current,
+      latest: npm.latest,
+      latestPublishedAt: npm.publishedAt,
+      repo: repo !== null ? `${repo.owner}/${repo.repo}` : null,
+      remoteSha: gh?.sha ?? null,
+      remotePushedAt: gh?.date ?? null,
+      baselineSha,
+      hasUpdate,
+      source,
     } satisfies InstalledVersion
   }))
-  return settled
-    .filter((r): r is PromiseFulfilledResult<InstalledVersion> => r.status === 'fulfilled')
-    .map((r) => r.value)
+  writeBaseline(state)
+  return settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []))
 }
 
 /** Cached README text; refresh happens on demand (TTL-bounded). */

@@ -282,6 +282,16 @@ function formatTime(iso: string): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+/** ISO 时间 → YYYY-MM-DD。 */
+function formatDate(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 function PluginCard({ plugin, t, installed, onReview, onViewRepo, onCheckUpdate }: {
   plugin: PluginEntry
   t: Translate
@@ -376,9 +386,14 @@ function buildCheckUpdatePrompt(plugin: PluginEntry): string {
  * LLM 只负责对每个候选做安全审查（依赖/代码/权限变更）与安装执行。
  */
 function buildBulkUpdatePrompt(updates: InstalledVersion[], t: Translate): string {
-  const lines = updates.map((p) => `- ${p.name}：当前 ${p.current} → 最新 ${p.latest ?? '?'}`)
+  const lines = updates.map((p) => {
+    const target = p.source === 'github'
+      ? `GitHub 远端最新提交 ${p.remotePushedAt !== null ? formatDate(p.remotePushedAt) : '?'}`
+      : `npm 最新版 ${p.latest ?? '?'}`
+    return `- ${p.name}：当前 ${p.current} → ${target}`
+  })
   return [
-    '以下已安装插件有可用更新（版本已由插件搜索插件代码比对完成，最新版来源 npm registry）：',
+    '以下已安装插件有可用更新（版本比对已由插件搜索插件代码完成：npm registry 最新版 + GitHub 远端 commit 基线）：',
     '',
     ...lines,
     '',
@@ -750,28 +765,56 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   )
 }
 
-/** 已安装 tab：顶部一键更新 + 已安装插件版本列表（代码侧比对结果）。 */
+/** 已安装 tab：顶部紧凑一键更新 + 卡片式插件列表（npm + GitHub 多源比对结果）。 */
 function InstalledPanel({ t, versions, onUpdateAll }: {
   t: Translate
   versions: InstalledVersion[] | null
   onUpdateAll: () => void
 }) {
   const updatable = (versions ?? []).filter((p) => p.hasUpdate)
-  const badgeText = (p: InstalledVersion): string => p.hasUpdate
-    ? t('updateAvailable')
-    : (p.latest !== null ? t('upToDate') : t('versionUnknown'))
-  const badgeStyleOf = (p: InstalledVersion): React.CSSProperties => p.hasUpdate
-    ? { fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#fff4e5', color: '#b45309', whiteSpace: 'nowrap' }
-    : { fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#e8f7ee', color: '#1a7f37', whiteSpace: 'nowrap' }
+
+  const badgeOf = (p: InstalledVersion): { text: string; style: React.CSSProperties } => {
+    const base: React.CSSProperties = { fontSize: 11, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap', flexShrink: 0 }
+    if (p.hasUpdate) {
+      const src = p.source === 'npm' ? t('fromNpm') : p.source === 'github' ? t('fromGithub') : ''
+      return {
+        text: src === '' ? t('updateAvailable') : `${t('updateAvailable')} · ${src}`,
+        style: { ...base, background: '#fff4e5', color: '#b45309' },
+      }
+    }
+    if (p.latest !== null || p.baselineSha !== null) {
+      return { text: t('upToDate'), style: { ...base, background: '#e8f7ee', color: '#1a7f37' } }
+    }
+    if (p.repo !== null) {
+      return { text: t('baselineReady'), style: { ...base, background: '#e8f0fe', color: '#1a56db' } }
+    }
+    return { text: t('versionUnknown'), style: { ...base, background: '#f3f4f6', color: '#6b7280' } }
+  }
+
+  const versionLine = (p: InstalledVersion): string => {
+    if (p.latest !== null) return `${t('currentVersion')} v${p.current} → ${t('latestVersion')} v${p.latest}`
+    return `${t('currentVersion')} v${p.current}`
+  }
+
+  const metaLine = (p: InstalledVersion): string => {
+    const parts: string[] = []
+    if (p.latestPublishedAt !== null) parts.push(`${t('fromNpm')} ${formatDate(p.latestPublishedAt)}`)
+    if (p.repo !== null && p.remotePushedAt !== null) {
+      parts.push(p.baselineSha !== null
+        ? `${t('repoLatest')} ${formatDate(p.remotePushedAt)}`
+        : `${t('baselineReady')} · ${formatDate(p.remotePushedAt)}`)
+    }
+    return parts.length > 0 ? parts.join(' · ') : '—'
+  }
+
   return h('div', { style: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 } },
     h('div', { style: { padding: '12px 14px', borderBottom: '1px solid var(--dsw-alias-divider, #ececf2)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
       h('button', {
-        type: 'button',
+        type: 'button', className: 'dshd-btn',
         style: {
-          ...btnStyle,
-          background: '#4176e6',
-          borderColor: '#4176e6',
-          color: '#fff',
+          ...cardBtnPrimaryStyle,
+          background: '#4176e6', borderColor: '#4176e6', color: '#fff',
+          padding: '6px 14px', fontSize: 12, fontWeight: 600,
           opacity: updatable.length === 0 ? 0.5 : 1,
           cursor: updatable.length === 0 ? 'default' : 'pointer',
         },
@@ -780,19 +823,30 @@ function InstalledPanel({ t, versions, onUpdateAll }: {
       }, `${t('updateAll')}${updatable.length > 0 ? ` (${updatable.length})` : ''}`),
       h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary, #7c7c9c)' } }, t('updateAllNote')),
     ),
-    h('div', { style: { flex: 1, overflowY: 'auto', padding: 8 } },
+    h('div', { style: { flex: 1, overflowY: 'auto', padding: 12 } },
       versions === null && h('div', { style: loadingStyle }, t('updateLoading')),
       versions !== null && versions.length === 0 && h('div', { style: emptyStyle }, t('noInstalled')),
-      versions !== null && versions.length > 0 && updatable.length === 0 && h('div', { style: emptyStyle }, t('updateEmpty')),
-      versions !== null && versions.map((p) => h('div', { key: p.name, style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid var(--dsw-alias-border, #e6e6ee)', marginBottom: 6 } },
-        h('div', { style: { flex: 1, minWidth: 0 } },
-          h('div', { style: { fontSize: 13, fontWeight: 600, color: '#1f2328', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.name),
-          h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary, #7c7c9c)', marginTop: 2 } },
-            `${t('currentVersion')} ${p.current}` + (p.latest !== null ? ` → ${t('latestVersion')} ${p.latest}` : ''),
+      versions !== null && versions.length > 0 && h('div', { style: gridStyle },
+        versions.map((p) => h('div', { key: p.name, style: cardStyle },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
+            h('div', { style: { width: 30, height: 30, borderRadius: 8, background: 'var(--dsw-alias-bg-layer-2, #2a2a4a)', display: 'grid', placeItems: 'center', flexShrink: 0 } },
+              h(PluginIcon, { size: 14 }),
+            ),
+            h('div', { style: { minWidth: 0 } },
+              h('div', { style: nameStyle }, p.name),
+              p.repo !== null && h('div', { style: ownerStyle }, p.repo),
+            ),
+            h('span', { style: badgeOf(p).style }, badgeOf(p).text),
           ),
-        ),
-        h('span', { style: badgeStyleOf(p) }, badgeText(p)),
-      )),
+          h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary, #e0e0f0)' } }, versionLine(p)),
+          h('div', { style: metaStyle }, metaLine(p)),
+          h('div', { style: cardFooterStyle },
+            h('div', { style: cardBtnGroupStyle },
+              p.repo !== null && h('a', { href: `https://github.com/${p.repo}`, target: '_blank', rel: 'noreferrer', style: repoBtnStyle }, t('viewRepo')),
+            ),
+          ),
+        )),
+      ),
     ),
   )
 }
