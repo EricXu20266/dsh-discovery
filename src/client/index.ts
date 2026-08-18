@@ -848,7 +848,7 @@ function DiscoveryTrigger({ wide, t, ctx }: { wide: boolean; t: Translate; ctx: 
           h('span', null, t('nav')),
           h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary, #7c7c9c)', fontWeight: 400 } }, t('subtitle')),
           fetchedAt !== '' && h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary, #9aa0b4)', fontWeight: 400 } }, `${t('lastRefresh')} ${formatTime(fetchedAt)}`),
-          h('button', { ref: closeButton, style: closeStyle, onClick: close, 'aria-label': '关闭' }, '✕ 关闭'),
+          h('button', { ref: closeButton, style: closeStyle, onClick: close, 'aria-label': '关闭', title: '关闭' }, '✕'),
         ),
         h('div', { style: { flex: 1, overflowY: 'hidden', padding: '0 4px' } }, h(DiscoveryBrowser, { t, ctx, onClose: close, onFetched: setFetchedAt })),
       ),
