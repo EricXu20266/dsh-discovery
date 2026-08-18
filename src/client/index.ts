@@ -760,16 +760,32 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
       ),
     ),
     tab === 'scenario' && h(ScenarioPanel, { listing, t, onInstall: handleInstall, onCustom: handleCustom }),
-    tab === 'installed' && h(InstalledPanel, { t, versions: installedVersions, onUpdateAll: handleUpdateAll }),
+    tab === 'installed' && h(InstalledPanel, { t, versions: installedVersions, onUpdateAll: handleUpdateAll, onViewRepo: (v) => setPreview(toPluginEntry(v)) }),
     preview !== null && h(RepoPreview, { plugin: preview, t, onClose: () => setPreview(null) }),
   )
 }
 
+/** InstalledVersion → PluginEntry（仓库预览面板复用；仅 owner/name/htmlUrl 有效）。 */
+function toPluginEntry(v: InstalledVersion): PluginEntry {
+  const parts = (v.repo ?? `${v.name}/${v.name}`).split('/')
+  return {
+    name: parts[1] ?? v.name,
+    owner: parts[0] ?? '',
+    description: '',
+    stars: 0,
+    language: null,
+    updatedAt: v.remotePushedAt ?? '',
+    htmlUrl: v.repo !== null ? `https://github.com/${v.repo}` : '',
+    topics: [],
+  }
+}
+
 /** 已安装 tab：顶部紧凑一键更新 + 卡片式插件列表（npm + GitHub 多源比对结果）。 */
-function InstalledPanel({ t, versions, onUpdateAll }: {
+function InstalledPanel({ t, versions, onUpdateAll, onViewRepo }: {
   t: Translate
   versions: InstalledVersion[] | null
   onUpdateAll: () => void
+  onViewRepo: (version: InstalledVersion) => void
 }) {
   const updatable = (versions ?? []).filter((p) => p.hasUpdate)
 
@@ -842,7 +858,7 @@ function InstalledPanel({ t, versions, onUpdateAll }: {
           h('div', { style: metaStyle }, metaLine(p)),
           h('div', { style: cardFooterStyle },
             h('div', { style: cardBtnGroupStyle },
-              p.repo !== null && h('a', { href: `https://github.com/${p.repo}`, target: '_blank', rel: 'noreferrer', style: repoBtnStyle }, t('viewRepo')),
+              p.repo !== null && h('button', { type: 'button', className: 'dshd-btn', style: repoBtnStyle, title: t('viewRepo'), onClick: () => onViewRepo(p) }, t('viewRepo')),
             ),
           ),
         )),
