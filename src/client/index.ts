@@ -210,6 +210,13 @@ const cardBtnPrimaryStyle: React.CSSProperties = {
 }
 /** Hover micro-interaction for card / scenario / header buttons (CSS class). */
 const HOVER_CSS = '.dshd-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08)) !important;border-color:var(--dsw-alias-brand-primary,#7aa2ff) !important}.dshd-update-all:hover{background:#2f5fd0 !important;border-color:#2f5fd0 !important;color:#fff !important}'
+/** 轻量 toast（面板内提示，2.2s 自动消失，置顶不挡交互）。 */
+const toastStyle: React.CSSProperties = {
+  position: 'fixed', left: '50%', bottom: 48, transform: 'translateX(-50%)',
+  background: 'rgba(28,28,44,.94)', color: '#e6e6f0', fontSize: 13,
+  padding: '8px 18px', borderRadius: 8, zIndex: 1200,
+  boxShadow: '0 8px 24px rgba(0,0,0,.35)', whiteSpace: 'nowrap', pointerEvents: 'none',
+}
 const tabRowStyle: React.CSSProperties = {
   display: 'flex', gap: 4, marginBottom: 12,
 }
@@ -617,6 +624,14 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   /** GitHub 全文搜索兜底：本地过滤无结果时触发。null=未搜索；[]=已搜无结果。 */
   const [searchResults, setSearchResults] = useState<PluginEntry[] | null>(null)
   const [searching, setSearching] = useState(false)
+  // 轻量 toast（无更新提示等）
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<number | undefined>(undefined)
+  const showToast = (text: string): void => {
+    setToast(text)
+    window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2200)
+  }
 
   const load = (): void => {
     setLoadError(false)
@@ -698,7 +713,10 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   }
   const handleUpdateAll = (): void => {
     const updates = (installedVersions ?? []).filter((p) => p.hasUpdate)
-    if (updates.length === 0) return
+    if (updates.length === 0) {
+      showToast(t('updateEmpty'))
+      return
+    }
     onClose()
     void openSessionAndSend(ctx, buildBulkUpdatePrompt(updates, t))
   }
@@ -762,6 +780,7 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
     tab === 'scenario' && h(ScenarioPanel, { listing, t, onInstall: handleInstall, onCustom: handleCustom }),
     tab === 'installed' && h(InstalledPanel, { t, versions: installedVersions, onUpdateAll: handleUpdateAll, onViewRepo: (v) => setPreview(toPluginEntry(v)) }),
     preview !== null && h(RepoPreview, { plugin: preview, t, onClose: () => setPreview(null) }),
+    toast !== null && h('div', { style: toastStyle }, toast),
   )
 }
 
@@ -831,11 +850,9 @@ function InstalledPanel({ t, versions, onUpdateAll, onViewRepo }: {
           ...cardBtnPrimaryStyle,
           background: '#4176e6', borderColor: '#4176e6', color: '#fff',
           padding: '6px 14px', fontSize: 12, fontWeight: 600,
-          opacity: updatable.length === 0 ? 0.5 : 1,
-          cursor: updatable.length === 0 ? 'default' : 'pointer',
         },
+        title: updatable.length > 0 ? `${t('updateAll')} (${updatable.length})` : t('updateEmpty'),
         onClick: onUpdateAll,
-        disabled: updatable.length === 0,
       }, `${t('updateAll')}${updatable.length > 0 ? ` (${updatable.length})` : ''}`),
       h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary, #7c7c9c)' } }, t('updateAllNote')),
     ),
