@@ -255,8 +255,14 @@ export async function scanRepository(owner: string, repo: string): Promise<Secur
   // 1) 元数据信誉（确定性事实）
   const { repo: meta, user } = await fetchMeta(owner, repo)
   if (meta === null) {
-    // 仓库 404：直接返回空报告（UI 降级）
-    return { owner, repo, scannedAt: new Date().toISOString(), level: 'safe', signals, evidence, pkg: null }
+    // 仓库元数据拉取失败（404 或网络异常）：不判 safe——明确告警「预检不完整」
+    signals.push({
+      severity: 'warn',
+      category: 'metadata',
+      title: '仓库元数据获取失败，预检不完整',
+      detail: '无法从 GitHub 获取仓库/owner 信息（仓库可能不存在，或网络/代理异常）。本次预检未覆盖脚本、代码与依赖扫描，请人工审查。',
+    })
+    return { owner, repo, scannedAt: new Date().toISOString(), level: 'review', signals, evidence, pkg: null }
   }
   const branch = meta.defaultBranch
   const repoAge = meta.createdAt === '' ? Number.POSITIVE_INFINITY : daysBetween(meta.createdAt, now)
@@ -479,7 +485,10 @@ export async function scanRepositoryCached(owner: string, repo: string): Promise
   const cached = scanCache.get(key)
   if (cached !== undefined && Date.now() - cached.at < SCAN_TTL_MS) return cached.data
   const report = await scanRepository(owner, repo)
-  scanCache.set(key, { at: Date.now(), data: report })
+  // 仅缓存「完整预检」结果（meta 拉取失败时报告无信号无 pkg，不缓存——避免把预检不完整固化成安全）
+  if (report.signals.length > 0 || report.pkg !== null) {
+    scanCache.set(key, { at: Date.now(), data: report })
+  }
   return report
 }
 
