@@ -22,6 +22,8 @@ export const inject = ['slots', 'locale', 'sessions', 'workspaces']
 /** Listing 缓存：sessionStorage（关闭标签页 = app 重启即清空）+ TTL 定时过期。 */
 const LISTING_TTL_MS = 10 * 60 * 1000
 const LISTING_CACHE_KEY = 'dshd.listing.cache.v1'
+/** 「只看插件」视图偏好（localStorage，跨会话保留）。 */
+const ONLY_PLUGINS_KEY = 'dshd.onlyPlugins'
 
 function readListingCache(): PluginListing | null {
   try {
@@ -763,8 +765,14 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   const [pluginStatus, setPluginStatus] = useState<Record<string, 'plugin' | 'not' | 'unknown'>>({})
   /** 后台渐进判定进度。 */
   const [scanProgress, setScanProgress] = useState<{ running: boolean; scanned: number; total: number; cached: boolean }>({ running: false, scanned: 0, total: 0, cached: false })
-  /** 「只看插件」开关。 */
-  const [onlyPlugins, setOnlyPlugins] = useState(false)
+  /** 「只看插件」开关（localStorage 持久化视图偏好）。 */
+  const [onlyPlugins, setOnlyPlugins] = useState<boolean>(() => {
+    try { return localStorage.getItem(ONLY_PLUGINS_KEY) === '1' } catch { return false }
+  })
+  const handleOnlyPlugins = (v: boolean): void => {
+    setOnlyPlugins(v)
+    try { localStorage.setItem(ONLY_PLUGINS_KEY, v ? '1' : '0') } catch { /* 隐私模式等不可用时忽略 */ }
+  }
   /** AI 生态摘要开关（host 持久化，默认开）。 */
   const [aiSummary, setAiSummary] = useState(true)
   /** GitHub 全文搜索兜底：本地过滤无结果时触发。null=未搜索；[]=已搜无结果。 */
@@ -988,7 +996,7 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
           title: t('onlyPlugins'),
           desc: t('onlyPluginsDesc'),
           checked: onlyPlugins,
-          onChange: setOnlyPlugins,
+          onChange: handleOnlyPlugins,
         }),
         h(SettingRow, {
           title: t('aiSummaryToggle'),
