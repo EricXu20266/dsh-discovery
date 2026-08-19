@@ -58,6 +58,7 @@ Discover → Filter → One-click submit → Deterministic pre-scan → LLM deep
 - **Community plugin browsing**: pulls all repos under the GitHub `dsh-plugin` topic (the community channel documented by DeepSeek official docs)
 - **Deterministic security pre-scan**: clicking "Audit & Install" triggers a host-side static scan (install scripts / entry code / dependencies / owner reputation); the report rides along with the audit prompt — see "Deterministic security pre-scan" below
 - **Plugin detection + "Plugins only"**: background progressive detection of whether a repo is a real DSH plugin (deterministic package.json signature); cards get "Plugin✓/Not a plugin✗" badges; a "Plugins only" toggle filters out unrelated repos — see "Plugin detection" below
+- **Agent integration**: ecosystem summary injected into the system prompt (toggleable) + two agent tools `dsh_discovery_search` / `dsh_discovery_audit` — see "Agent integration" below
 - **Reputation badges**: personal account, star/fork anomaly (suspected star farming) visible directly on cards
 - **Category browsing**: 7 functional categories + Other (regex-based on name/topics/description)
 - **Scenario config**: 5 usage scenarios with scenario-based filtering (see "Scenario design" below)
@@ -66,7 +67,7 @@ Discover → Filter → One-click submit → Deterministic pre-scan → LLM deep
 - **Installed marker**: reads profile manifest bundles to distinguish built-in from user-installed
 - **LLM-audited install**: one-click generation of an audit prompt for the LLM (carrying the deterministic pre-scan report); install on pass, stop on risk; built-in Markdown renderer previews README + GitHub external links
 - **Check updates**: generates an update-check prompt for installed plugins — compare versions, audit the changelog, **and re-run security review before updating** (compare old/new dependencies/code/permission changes, watch for supply-chain poisoning; only run `dsh plugin update` after passing, stop on risk)
-- **Listing cache**: 5-minute server-side TTL (`?force=1` to force refresh) + 10-minute client sessionStorage + 24-hour plugin-verdict disk cache
+- **Listing cache**: 5-minute server-side TTL (`?force=1` to force refresh) + 10-minute client sessionStorage (empty results are never cached) + 24-hour plugin-verdict disk cache
 - **i18n**: zh / en bilingual UI
 
 ---
@@ -123,6 +124,30 @@ listing returns (concurrent fetch, 2-3s) → list renders instantly
 - **"Plugins only" toggle**: scanning never changes the sort (stars, descending, unchanged); verified plugins slot in by star; unverified ones sink to a "pending" section (taking no sort slots, joining automatically once confirmed); non-plugins hidden. List keys reuse DOM — result inflow causes **no layout jumping**
 - **Failure semantics**: repo 404 / no `package.json` → deterministically "not a plugin"; network failure → recorded `unknown` (treated as unverified, **never persisted as a verdict**, retried after a 10-minute cooldown)
 - **Orthogonal to search/categories**: the plugin toggle is an independent filter dimension, independent of keyword and category tabs
+
+---
+
+## Agent integration
+
+The DHS agent (LLM) doesn't only see the plugin ecosystem through the UI — it can **perceive and invoke the discovery browser directly** in conversation, through two channels:
+
+**Channel A: dynamic ecosystem summary (system-prompt injection, toggleable)**
+
+The `systemPrompt.section` text is a **function** evaluated at every prompt assembly, injecting the ecosystem overview into the agent's system prompt (repo count, plugin-verdict stats, installed plugins, available tools, security rules). The agent "knows" the ecosystem before you even ask.
+
+- Cost: ~200 tokens per conversation — a "Ecosystem summary → system prompt" toggle in the browser's default tab (ON by default). When OFF the agent gets no passive ecosystem info but can still query on demand via the tools
+- Setting persists in `~/.dsh/profiles/<profile>/dsh-discovery-settings.json` (shared by host and UI)
+
+**Channel B: agent tools (on-demand invocation)**
+
+Two standard agent tools are registered (`defineTool` pattern, same as DHS's built-in tool-* plugins):
+
+| Tool | Capability |
+|---|---|
+| `dsh_discovery_search` | Keyword search of the community registry → stars / plugin verdict (plugin/not/unknown) / owner reputation signals |
+| `dsh_discovery_audit` | **Deterministic security pre-scan** of a repo → risk report (safe/review/caution + signals + evidence snippets) |
+
+Before installing any third-party plugin, the agent should call `dsh_discovery_audit` first. Users can simply ask the agent "find me a notification plugin" or "is the XX repo safe?".
 
 ---
 

@@ -57,7 +57,8 @@ dsh-discovery 自身保持严格的只读边界：不安装、不更新、不卸
 
 - **社区插件浏览**：拉取 GitHub `dsh-plugin` 话题下全部仓库（DeepSeek 官方文档记载的社区渠道）
 - **确定性安全预检**：点「审查安装」时 host 静态扫描仓库（安装脚本/入口代码/依赖/owner 信誉），报告随审查 prompt 进会话——详见「确定性安全预检」章节
-- **插件判定 + 只看插件**：后台渐进判定仓库是否为真 DSH 插件（package.json 确定性签名），卡片标记「插件✓/非插件✗」，「只看插件」开关一键过滤无关仓库——详见「插件判定」章节
+- **插件判定 + 只看插件**：后台渐进判定仓库是否为真 DSH 插件（package.json 确定性签名），卡片标记「插件✓/非插件✗」，「只看插件」滑块一键过滤无关仓库——详见「插件判定」章节
+- **Agent 感知**：生态摘要注入 system prompt（可开关）+ `dsh_discovery_search`/`dsh_discovery_audit` 两个 agent 工具——详见「Agent 感知」章节
 - **信誉信号徽章**：个人账号、星数/fork 异常（疑似刷星）在卡片直接可见
 - **分类浏览**：7 类功能分类 + 其他（基于名称/话题/描述正则归属）
 - **场景配置**：5 个使用场景 + 场景化筛选（见下文「场景化设计」）
@@ -66,7 +67,7 @@ dsh-discovery 自身保持严格的只读边界：不安装、不更新、不卸
 - **已安装标识**：读 profile manifest bundles，区分内置与用户安装
 - **LLM 审查安装**：一键生成审查 prompt 交 LLM（携带确定性预检报告），通过则装、有风险则停；内置 Markdown 渲染器预览 README + GitHub 外链
 - **检查更新**：已安装插件生成更新检查 prompt 交 LLM——对比版本、审查 changelog，**更新前同样执行安全审查**（对比新旧依赖/代码/权限变更，警惕供应链投毒，通过才 `dsh plugin update`，有风险则停止）
-- **listing 缓存**：服务端 5 分钟 TTL（`?force=1` 强制刷新）+ 客户端 sessionStorage 10 分钟 + 插件判定磁盘缓存 24 小时
+- **listing 缓存**：服务端 5 分钟 TTL（`?force=1` 强制刷新）+ 客户端 sessionStorage 10 分钟（空结果不固化）+ 插件判定磁盘缓存 24 小时
 - **i18n**：zh / en 双语界面
 
 ---
@@ -123,6 +124,30 @@ listing 返回（并发拉取，2-3s） → 列表照常显示
 - **「只看插件」开关**：扫描不改变排序（star 降序不变），已确认插件按 star 正常入列；未确认的沉底「待确认区」（不占排序位，确认后自动按 star 插入）；非插件隐藏。列表 key 复用 DOM，结果回流**无跳动**
 - **失败语义**：仓库 404 / 无 package.json → 确定性「非插件」；网络失败 → 记 `unknown`（视同未判定，**不写盘固化**，10 分钟冷却后自动重试）
 - **与搜索/分类正交**：插件开关是独立过滤维度，与关键词、分类 Tab 互不干扰
+
+---
+
+## Agent 感知
+
+dsh 的 agent（LLM）不仅能通过 UI 看到插件生态，还能在会话中**直接感知与调用**搜索器——两条通道：
+
+**机制 A：动态生态摘要（system prompt 注入，可开关）**
+
+`systemPrompt.section` 的 text 是**函数**，每次会话组装时实时求值，向 agent 注入生态概况（社区仓库数、插件判定统计、已安装插件、可用工具、安全铁律）。agent 在你提问之前就「知道」插件生态。
+
+- 代价：每次会话约 200 token——搜索器「全部」tab 下提供「生态摘要注入 system prompt」滑块（默认开），关闭后 agent 不再被动获得生态信息，但仍可用工具按需查询
+- 设置持久化在 `~/.dsh/profiles/<profile>/dsh-discovery-settings.json`（host 与 UI 共享）
+
+**机制 B：agent 工具（按需调用）**
+
+注册了两个标准 agent 工具（`defineTool` 范式，同 DHS 内置 tool-* 插件）：
+
+| 工具 | 能力 |
+|---|---|
+| `dsh_discovery_search` | 关键词搜索社区插件 → 星级 / 插件判定（plugin/not/unknown）/ owner 信誉信号 |
+| `dsh_discovery_audit` | 对插件仓库做**确定性安全预检** → 风险报告（safe/review/caution + 信号清单 + 证据片段） |
+
+安装任何第三方插件前，agent 应先调用 `dsh_discovery_audit` 预检；用户也可以直接让 agent「搜个通知类插件」「看看 XX 仓库安全吗」。
 
 ---
 
