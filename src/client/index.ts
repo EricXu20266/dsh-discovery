@@ -28,6 +28,8 @@ function readListingCache(): PluginListing | null {
     const raw = sessionStorage.getItem(LISTING_CACHE_KEY)
     if (raw === null) return null
     const parsed = JSON.parse(raw) as { at: number; data: PluginListing }
+    // 空列表缓存忽略（可能是瞬时拉取失败被固化）——视同无缓存，重新拉取
+    if (parsed.data.plugins.length === 0) return null
     return Date.now() - parsed.at < LISTING_TTL_MS ? parsed.data : null
   } catch {
     return null
@@ -36,6 +38,8 @@ function readListingCache(): PluginListing | null {
 
 function writeListingCache(data: PluginListing): void {
   try {
+    // 空列表不写缓存：避免把瞬时失败/空结果固化（用户会看到「没有匹配的插件」且 10 分钟内无法恢复）
+    if (data.plugins.length === 0) return
     sessionStorage.setItem(LISTING_CACHE_KEY, JSON.stringify({ at: Date.now(), data }))
   } catch {
     // storage 不可用（隐私模式等）时静默降级为每次拉取
@@ -793,6 +797,19 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
       })
       .catch(() => setLoadError(true))
   }
+  /** 强制刷新：清 sessionStorage 缓存 + host force 重拉 GitHub（空列表/加载失败时的手动恢复通道）。 */
+  const handleForceRefresh = (): void => {
+    sessionStorage.removeItem(LISTING_CACHE_KEY)
+    setLoadError(false)
+    fetch('/dsh-discovery/listing?force=1', { cache: 'no-store' })
+      .then((res) => { if (!res.ok) throw new Error('HTTP ' + String(res.status)); return res.json() })
+      .then((body: PluginListing) => {
+        writeListingCache(body)
+        setListing(body)
+        onFetched(body.fetchedAt)
+      })
+      .catch(() => setLoadError(true))
+  }
   useEffect(load, [])
   useEffect(() => {
     fetch('/dsh-discovery/installed', { cache: 'no-store' })
@@ -1020,7 +1037,13 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
         ),
         !loadError && listing !== null && onlyPlugins && mainPlugins.length === 0 && pendingPlugins.length === 0 && plugins.length > 0 && h('div', { style: emptyStyle }, t('noPluginFiltered')),
         !loadError && listing !== null && fallbackView,
-        !loadError && listing !== null && plugins.length === 0 && q.trim() === '' && h('div', { style: emptyStyle }, t('empty')),
+        !loadError && listing !== null && plugins.length === 0 && q.trim() === '' && h('div', { style: emptyStyle },
+          h('div', null, t('empty')),
+          h('button', {
+            type: 'button', className: 'dshd-btn', style: { ...cardBtnStyle, marginTop: 10 },
+            onClick: handleForceRefresh,
+          }, t('refresh')),
+        ),
       ),
     ),
     tab === 'scenario' && h(ScenarioPanel, { listing, t, onInstall: handleInstall, onCustom: handleCustom }),
