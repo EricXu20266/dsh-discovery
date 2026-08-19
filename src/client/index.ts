@@ -9,9 +9,10 @@ import { createElement as h, useEffect, useMemo, useRef, useState, type ReactNod
 import type { Translate } from './locales-types.ts'
 import { zh, en } from './locales.ts'
 import {
-  filterPlugins, orderedCategories, isOfficial, SCENARIOS, scenarioPlugins,
+  filterPlugins, orderedCategories, isOfficial, suspiciousStars, SCENARIOS, scenarioPlugins,
   type PluginEntry, type PluginListing, type Scenario, type InstalledVersion,
 } from './market-data.ts'
+import type { SecurityReport, SecuritySignal } from '../security.ts'
 
 export const name = 'dsh-discovery'
 // Locale + slots + session orchestration injected before apply runs.
@@ -188,6 +189,18 @@ const badgeThirdStyle: React.CSSProperties = {
   color: 'var(--dsw-alias-label-tertiary, #7c7c9c)', padding: '1px 7px', borderRadius: 999, lineHeight: '16px',
   border: '1px solid currentColor', flexShrink: 0,
 }
+/** L0 信誉信号徽章：个人账号（非组织非官方）。 */
+const badgePersonalStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 600,
+  color: '#c084fc', padding: '1px 7px', borderRadius: 999, lineHeight: '16px',
+  border: '1px solid currentColor', flexShrink: 0,
+}
+/** L0 信誉信号徽章：星数/fork 比异常（疑似刷星）。 */
+const badgeStarAnomalyStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 600,
+  color: '#f97316', padding: '1px 7px', borderRadius: 999, lineHeight: '16px',
+  border: '1px solid currentColor', flexShrink: 0,
+}
 const installedBadgeStyle: React.CSSProperties = {
   marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', flexShrink: 0,
 }
@@ -299,10 +312,12 @@ function formatDate(iso: string): string {
   return `${y}-${m}-${day}`
 }
 
-function PluginCard({ plugin, t, installed, onReview, onViewRepo, onCheckUpdate }: {
+function PluginCard({ plugin, t, installed, scanning, onReview, onViewRepo, onCheckUpdate }: {
   plugin: PluginEntry
   t: Translate
   installed: boolean
+  /** 确定性预检进行中（按钮禁用，显示预检中）。 */
+  scanning: boolean
   onReview: (plugin: PluginEntry) => void
   onViewRepo: (plugin: PluginEntry) => void
   onCheckUpdate: (plugin: PluginEntry) => void
@@ -323,14 +338,19 @@ function PluginCard({ plugin, t, installed, onReview, onViewRepo, onCheckUpdate 
     h('div', { style: metaStyle },
       h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 3 } }, h(StarIcon), plugin.stars),
       plugin.language !== null && h('span', null, plugin.language),
-      plugin.updatedAt !== '' && h('span', null, t('updated') + ' ' + plugin.updatedAt.slice(0, 10)),
+      plugin.updatedAt !== '' && h('span', null, `${t('updated')} ${plugin.updatedAt.slice(0, 10)}`),
     ),
     h('div', { style: cardFooterStyle },
       h('span', { style: official ? badgeOfficialStyle : badgeThirdStyle }, official ? t('official') : t('thirdParty')),
+      !official && plugin.ownerType === 'user' && h('span', { style: badgePersonalStyle, title: t('personalBadgeTip') }, t('personalBadge')),
+      !official && suspiciousStars(plugin) && h('span', { style: badgeStarAnomalyStyle, title: t('starAnomalyTip') }, t('starAnomaly')),
       h('div', { style: cardBtnGroupStyle },
         installed
           ? h('button', { type: 'button', className: 'dshd-btn', style: cardBtnPrimaryStyle, title: t('checkUpdate'), onClick: () => onCheckUpdate(plugin) }, t('checkUpdate'))
-          : h('button', { type: 'button', className: 'dshd-btn', style: cardBtnPrimaryStyle, title: t('reviewInstall'), onClick: () => onReview(plugin) }, t('reviewInstall')),
+          : h('button', {
+              type: 'button', className: 'dshd-btn', style: cardBtnPrimaryStyle,
+              title: t('reviewInstall'), disabled: scanning, onClick: () => onReview(plugin),
+            }, scanning ? t('preScanning') : t('reviewInstall')),
         h('button', { type: 'button', className: 'dshd-btn', style: cardBtnStyle, title: t('viewRepo'), onClick: () => onViewRepo(plugin) }, t('viewRepo')),
       ),
     ),
@@ -358,16 +378,41 @@ async function openSessionAndSend(ctx: DiscoveryClientContext, text: string): Pr
   return true
 }
 
-function buildReviewPrompt(plugin: PluginEntry, t: Translate): string {
+/** 确定性预检信号 → 审查 prompt 中的信号清单文本。 */
+function signalLines(report: SecurityReport | null): string[] {
+  if (report === null) return []
+  if (report.signals.length === 0) {
+    return ['确定性预检未发现风险信号（无安装脚本、无敏感路径写入、依赖与账号信誉正常）。',
+      '但仍需你人工复核代码，确认不存在预检规则覆盖不到的行为。']
+  }
+  const sev = (s: SecuritySignal): string => s.severity === 'danger' ? '🔴 高危' : s.severity === 'warn' ? '🟡 关注' : '🔵 提示'
+  return [
+    `确定性预检评级：${report.level === 'caution' ? '🔴 高危（建议默认不安装，除非你确认风险可控）' : report.level === 'review' ? '🟡 需人工审查' : '🟢 无风险信号'}`,
+    '',
+    '预检发现的信号：',
+    ...report.signals.map((s) => `- [${sev(s)}] ${s.title}：${s.detail}`),
+  ]
+}
+
+function buildReviewPrompt(plugin: PluginEntry, t: Translate, report: SecurityReport | null): string {
   return [
     `请审查并安装插件仓库：${plugin.htmlUrl}（${plugin.owner}/${plugin.name}）`,
     '',
-    '请先审查该仓库源码（README、package.json、入口代码、依赖），重点确认：',
-    '1. 无恶意行为（异常网络请求、文件读写、环境变量/密钥窃取、命令执行）',
-    '2. 与描述相符，无隐藏后门',
-    '3. 许可证与依赖安全',
+    '该仓库已由 dsh-discovery 完成确定性安全预检（静态规则扫描，仅作锚点，最终判断以你读码为准）。',
+    ...signalLines(report),
     '',
-    '审查通过后，使用 dsh plugin add 安装该插件。若发现风险，请列出风险点并停止安装。',
+    '请按以下清单逐项审查源码（禁止只看 README，README 可伪造）：',
+    '1. package.json scripts：是否存在 install/postinstall/prepare 等安装时自动执行的脚本？脚本内容是否涉及下载执行、写敏感路径、窃取密钥？',
+    '2. 入口代码（main/bin 指向的文件及 import 链）：是否存在 eval/动态执行、child_process 启动外部命令、写 ~/.ssh 或 shell 配置、读取并外发 .env/API key？',
+    '3. 依赖安全：依赖名是否与知名包相似（typosquatting）？依赖数量是否异常？file:/git: 引用的来源是否可信？',
+    '4. 网络行为：代码中的外链域名是否都是正常用途（遥测上报 vs 数据窃取）？',
+    '5. 与描述相符：功能是否与 README 声明一致，有无隐藏行为？',
+    '6. owner 信誉：结合账号年龄与仓库活跃度判断是否为一次性恶意分发账号。',
+    '',
+    '审查结论：',
+    '- 通过 → 使用 dsh plugin add 安装该插件。',
+    '- 发现风险 → 列出风险点（含文件位置），明确停止安装。',
+    '- 预检评级为 🔴 高危时，除非你阅读代码后确认风险可控，否则默认拒绝安装。',
     '',
     t('networkNote'),
   ].join('\n')
@@ -417,8 +462,14 @@ function buildBulkUpdatePrompt(updates: InstalledVersion[], t: Translate): strin
 }
 
 function scenarioLines(plugins: PluginEntry[]): string[] {
-  return plugins.slice(0, 20).map((p) =>
-    `- ${p.owner}/${p.name}（⭐${p.stars}，更新于 ${p.updatedAt.slice(0, 10)}）：${p.description || '—'}`)
+  return plugins.slice(0, 20).map((p) => {
+    const signals = [
+      p.ownerType === 'user' ? '个人账号' : null,
+      suspiciousStars(p) ? '星数/fork 异常' : null,
+    ].filter((s) => s !== null)
+    const sig = signals.length > 0 ? `（信号：${signals.join('、')}）` : ''
+    return `- ${p.owner}/${p.name}${sig}（⭐${p.stars}，更新于 ${p.updatedAt.slice(0, 10)}）：${p.description || '—'}`
+  })
 }
 
 function buildScenarioBatchPrompt(scenario: Scenario, plugins: PluginEntry[], t: Translate): string {
@@ -427,14 +478,19 @@ function buildScenarioBatchPrompt(scenario: Scenario, plugins: PluginEntry[], t:
     '',
     `场景需求：${t(`scenario_${scenario.id}_desc`)}`,
     '',
-    '候选插件清单（已按 star 数排序）：',
+    '候选插件清单（已按 star 数排序，含信誉信号标注）：',
     ...scenarioLines(plugins),
     '',
     '请自主判断并安装：',
     '1. 不要安装功能重复的插件（同类功能只选最优，以 star 数和更新时间为准）',
-    '2. 安装前先审查每个候选仓库的安全性',
-    '3. 使用 dsh plugin add 安装筛选后的插件',
-    '4. 完成后简述安装了哪些、为什么选它们',
+    '2. 安全硬门槛——以下高风险特征任一命中，直接跳过该插件并在报告中注明原因（不安装）：',
+    '   - owner 为全新账号（注册不足 90 天）或「个人账号 + 新仓库 + 高 star」组合',
+    '   - package.json 含 install/postinstall/prepare 安装脚本，且脚本内容涉及下载执行、写敏感路径、读密钥',
+    '   - 入口代码存在 base64 解码后执行、写 ~/.ssh 或 shell 配置、把密钥外发到陌生域名',
+    '   - 依赖名与 @deepseek-ai/* 等核心包相似（typosquatting 嫌疑）',
+    '   - 星数/fork 比异常（高 star 低 fork，疑似刷星）',
+    '3. 通过安全门槛的候选，仍需快速核对源码后使用 dsh plugin add 安装',
+    '4. 完成后简述：安装了哪些、跳过了哪些及原因（被跳过的必须说明命中哪条安全门槛）',
     '',
     t('networkNote'),
   ].join('\n')
@@ -621,6 +677,8 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('all')
   const [preview, setPreview] = useState<PluginEntry | null>(null)
+  /** 确定性预检进行中的插件（按钮禁用防重复点击）。 */
+  const [scanning, setScanning] = useState<PluginEntry | null>(null)
   /** GitHub 全文搜索兜底：本地过滤无结果时触发。null=未搜索；[]=已搜无结果。 */
   const [searchResults, setSearchResults] = useState<PluginEntry[] | null>(null)
   const [searching, setSearching] = useState(false)
@@ -695,9 +753,24 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
 
   // 本地无结果时的兜底视图（定义在 handler 之后，见下方 fallbackView）
 
+  /**
+   * 审查安装：先调 host 确定性预检（拉 package.json + 静态规则扫描，~1-2s），
+   * 预检报告随 prompt 一起发进会话，作为 LLM 深度审查的锚点。
+   * 预检失败（网络/非 npm 仓库）降级为无报告 prompt。
+   */
   const handleReview = (plugin: PluginEntry): void => {
-    onClose()
-    void openSessionAndSend(ctx, buildReviewPrompt(plugin, t))
+    setScanning(plugin)
+    void fetch(`/dsh-discovery/security?owner=${encodeURIComponent(plugin.owner)}&repo=${encodeURIComponent(plugin.name)}`, { cache: 'no-store' })
+      .then((res) => { if (!res.ok) throw new Error('HTTP ' + String(res.status)); return res.json() })
+      .then((report: SecurityReport) => {
+        onClose()
+        void openSessionAndSend(ctx, buildReviewPrompt(plugin, t, report))
+      })
+      .catch(() => {
+        onClose()
+        void openSessionAndSend(ctx, buildReviewPrompt(plugin, t, null))
+      })
+      .finally(() => setScanning(null))
   }
   const handleCheckUpdate = (plugin: PluginEntry): void => {
     onClose()
@@ -731,7 +804,7 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
                 h('div', { style: onlineNoteStyle }, t('searchOnlineResults').replace('{n}', String(searchResults.length))),
                 h('div', { style: gridStyle },
                   searchResults.map((p) => h(PluginCard, {
-                    key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed),
+                    key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed), scanning: scanning !== null && scanning.htmlUrl === p.htmlUrl,
                     onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
                   })),
                 ),
@@ -769,7 +842,7 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
         !loadError && listing === null && h('div', { style: loadingStyle }, t('loading')),
         !loadError && listing !== null && plugins.length > 0 && h('div', { style: gridStyle },
           plugins.map((p) => h(PluginCard, {
-            key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed),
+            key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed), scanning: scanning !== null && scanning.htmlUrl === p.htmlUrl,
             onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
           })),
         ),
@@ -796,6 +869,9 @@ function toPluginEntry(v: InstalledVersion): PluginEntry {
     updatedAt: v.remotePushedAt ?? '',
     htmlUrl: v.repo !== null ? `https://github.com/${v.repo}` : '',
     topics: [],
+    ownerType: null,
+    repoCreatedAt: '',
+    forks: 0,
   }
 }
 

@@ -70,6 +70,11 @@ export const zh = {
   baselineReady: '基线已建立',
   fromNpm: 'npm',
   fromGithub: 'GitHub',
+  personalBadge: '个人',
+  personalBadgeTip: '个人账号发布的插件（非组织）。请结合账号年龄与仓库活跃度判断可信度。',
+  starAnomaly: '星数异常',
+  starAnomalyTip: '星数/fork 比异常，疑似刷星。正常开源项目 fork 约为 star 的 5%~20%。',
+  preScanning: '预检中…',
 }
 
 export const en = {
@@ -142,4 +147,9 @@ export const en = {
   baselineReady: 'Baseline set',
   fromNpm: 'npm',
   fromGithub: 'GitHub',
+  personalBadge: 'Personal',
+  personalBadgeTip: 'Published by a personal account (not an org). Judge credibility by account age and repo activity.',
+  starAnomaly: 'Stars anomaly',
+  starAnomalyTip: 'Star/fork ratio anomaly — suspected star farming. Healthy open-source repos fork ~5–20% of their stars.',
+  preScanning: 'Pre-scanning…',
 }

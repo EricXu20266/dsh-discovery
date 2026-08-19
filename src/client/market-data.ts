@@ -9,6 +9,12 @@ export interface PluginEntry {
   updatedAt: string
   htmlUrl: string
   topics: string[]
+  /** owner 类型：'org'=组织 / 'user'=个人。 */
+  ownerType: 'org' | 'user' | null
+  /** 仓库创建时间（ISO）。 */
+  repoCreatedAt: string
+  /** fork 数（star/fork 比异常 = 疑似刷星）。 */
+  forks: number
 }
 
 export interface PluginListing {
@@ -137,6 +143,15 @@ const OFFICIAL_OWNERS = new Set(['deepseek-ai'])
 /** Whether a repository is an official DeepSeek release. */
 export function isOfficial(plugin: PluginEntry): boolean {
   return OFFICIAL_OWNERS.has(plugin.owner)
+}
+
+/**
+ * L0 信誉信号：星数/fork 比异常（疑似刷星）。
+ * 正常开源项目 fork 约为 star 的 5%~20%（star/fork 5~20）；>50 或高星零 fork 很可疑。
+ */
+export function suspiciousStars(plugin: PluginEntry): boolean {
+  if (plugin.stars < 50) return false
+  return plugin.forks === 0 || plugin.stars / plugin.forks > 50
 }
 
 /* ── scenario packs (batch / guided install) ─────────────────────────────── */

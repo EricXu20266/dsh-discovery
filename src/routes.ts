@@ -19,6 +19,7 @@ import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { sendJson } from './http.ts'
+import { scanRepositoryCached } from './security.ts'
 
 export interface WebServerService {
   register(route: {
@@ -47,6 +48,12 @@ export interface PluginEntry {
   updatedAt: string
   htmlUrl: string
   topics: string[]
+  /** owner 类型：'org'=组织 / 'user'=个人（GitHub search API 直接返回，零额外请求）。 */
+  ownerType: 'org' | 'user' | null
+  /** 仓库创建时间（ISO，search API 自带）。 */
+  repoCreatedAt: string
+  /** fork 数（配合 stars 做刷星信号：star/fork 比异常 = 疑似刷星）。 */
+  forks: number
 }
 
 export interface PluginListing {
@@ -61,10 +68,31 @@ interface GitHubRepo {
   full_name: string
   description: string | null
   stargazers_count: number
+  forks_count?: number
   language: string | null
   updated_at: string
+  created_at?: string
   html_url: string
   topics?: string[]
+  owner?: { type?: string }
+}
+
+/** search API 返回的仓库 → 插件条目（search API 自带 owner.type / created_at / forks，零额外请求）。 */
+function toPluginEntry(repo: GitHubRepo): PluginEntry {
+  const fullName = repo.full_name.split('/')
+  return {
+    name: fullName[1] ?? repo.full_name,
+    owner: fullName[0] ?? '',
+    description: repo.description ?? '',
+    stars: repo.stargazers_count,
+    language: repo.language,
+    updatedAt: repo.updated_at,
+    htmlUrl: repo.html_url,
+    topics: repo.topics ?? [],
+    ownerType: repo.owner?.type === 'Organization' ? 'org' : repo.owner?.type === 'User' ? 'user' : null,
+    repoCreatedAt: repo.created_at ?? '',
+    forks: repo.forks_count ?? 0,
+  }
 }
 
 /** Fetch one page of GitHub search results for the dsh-plugin topic. */
@@ -95,16 +123,7 @@ export async function fetchListing(): Promise<PluginListing> {
       break // transient GitHub errors: serve what we have
     }
   }
-  const plugins: PluginEntry[] = all.map((repo) => ({
-    name: repo.full_name.split('/')[1] ?? repo.full_name,
-    owner: repo.full_name.split('/')[0] ?? '',
-    description: repo.description ?? '',
-    stars: repo.stargazers_count,
-    language: repo.language,
-    updatedAt: repo.updated_at,
-    htmlUrl: repo.html_url,
-    topics: repo.topics ?? [],
-  }))
+  const plugins: PluginEntry[] = all.map(toPluginEntry)
   const listing: PluginListing = {
     total: plugins.length,
     plugins,
@@ -147,16 +166,7 @@ async function fetchSearch(q: string): Promise<PluginEntry[] | null> {
     })
     if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`)
     const body = (await res.json()) as { items?: GitHubRepo[] }
-    const plugins: PluginEntry[] = (body.items ?? []).map((repo) => ({
-      name: repo.full_name.split('/')[1] ?? repo.full_name,
-      owner: repo.full_name.split('/')[0] ?? '',
-      description: repo.description ?? '',
-      stars: repo.stargazers_count,
-      language: repo.language,
-      updatedAt: repo.updated_at,
-      htmlUrl: repo.html_url,
-      topics: repo.topics ?? [],
-    }))
+    const plugins: PluginEntry[] = (body.items ?? []).map(toPluginEntry)
     searchCache.set(key, { at: Date.now(), data: plugins })
     return plugins
   } catch {
@@ -487,6 +497,27 @@ export function mountDiscoveryRoutes(host: DiscoveryHost, listInstalled: () => s
           sendJson(response, 200, { markdown })
         } catch (error) {
           sendJson(response, 404, {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      },
+    }),
+    host.webServer.register({
+      kind: 'exact',
+      path: '/dsh-discovery/security',
+      handler: async (request, response) => {
+        try {
+          const url = new URL(request.url ?? '', 'http://localhost')
+          const owner = url.searchParams.get('owner') ?? ''
+          const repo = url.searchParams.get('repo') ?? ''
+          if (owner === '' || repo === '') {
+            sendJson(response, 400, { error: 'owner and repo are required' })
+            return
+          }
+          const report = await scanRepositoryCached(owner, repo)
+          sendJson(response, 200, report)
+        } catch (error) {
+          sendJson(response, 500, {
             error: error instanceof Error ? error.message : String(error),
           })
         }
