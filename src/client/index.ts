@@ -13,6 +13,7 @@ import {
   type PluginEntry, type PluginListing, type Scenario, type InstalledVersion,
 } from './market-data.ts'
 import type { SecurityReport, SecuritySignal } from '../security.ts'
+import type { PluginScanState } from '../plugin-check.ts'
 
 export const name = 'dsh-discovery'
 // Locale + slots + session orchestration injected before apply runs.
@@ -201,6 +202,36 @@ const badgeStarAnomalyStyle: React.CSSProperties = {
   color: '#f97316', padding: '1px 7px', borderRadius: 999, lineHeight: '16px',
   border: '1px solid currentColor', flexShrink: 0,
 }
+/** 确定性插件判定徽章：确认为 DSH 插件。 */
+const badgePluginStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 600,
+  color: '#22c55e', padding: '1px 7px', borderRadius: 999, lineHeight: '16px',
+  border: '1px solid currentColor', flexShrink: 0,
+}
+/** 确定性插件判定徽章：确认为非插件。 */
+const badgeNotPluginStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', fontSize: 10, fontWeight: 600,
+  color: '#9ca3af', padding: '1px 7px', borderRadius: 999, lineHeight: '16px',
+  border: '1px solid currentColor', flexShrink: 0,
+}
+/** 「只看插件」开关样式。 */
+const filterToggleStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+  fontSize: 12, color: 'var(--dsw-alias-label-secondary, #9aa0b4)',
+  userSelect: 'none', marginBottom: 10,
+}
+/** 插件确认进度条（一行轻量提示）。 */
+const scanProgressStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8, fontSize: 11,
+  color: 'var(--dsw-alias-label-secondary, #7c7c9c)', margin: '0 0 8px',
+}
+const scanBarTrackStyle: React.CSSProperties = {
+  flex: 1, height: 4, borderRadius: 2, background: 'var(--dsw-alias-bg-layer-2, #2a2a4a)', overflow: 'hidden',
+}
+const scanBarFillStyle: React.CSSProperties = {
+  height: '100%', borderRadius: 2, background: 'var(--dsw-static-deepseek-500, #4176E6)',
+  transition: 'width .4s ease',
+}
 const installedBadgeStyle: React.CSSProperties = {
   marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', flexShrink: 0,
 }
@@ -344,6 +375,8 @@ function PluginCard({ plugin, t, installed, scanning, onReview, onViewRepo, onCh
       h('span', { style: official ? badgeOfficialStyle : badgeThirdStyle }, official ? t('official') : t('thirdParty')),
       !official && plugin.ownerType === 'user' && h('span', { style: badgePersonalStyle, title: t('personalBadgeTip') }, t('personalBadge')),
       !official && suspiciousStars(plugin) && h('span', { style: badgeStarAnomalyStyle, title: t('starAnomalyTip') }, t('starAnomaly')),
+      plugin.isPlugin === 'plugin' && h('span', { style: badgePluginStyle, title: t('pluginBadgeTip') }, t('pluginBadge')),
+      plugin.isPlugin === 'not' && h('span', { style: badgeNotPluginStyle, title: t('notPluginBadgeTip') }, t('notPluginBadge')),
       h('div', { style: cardBtnGroupStyle },
         installed
           ? h('button', { type: 'button', className: 'dshd-btn', style: cardBtnPrimaryStyle, title: t('checkUpdate'), onClick: () => onCheckUpdate(plugin) }, t('checkUpdate'))
@@ -679,6 +712,12 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   const [preview, setPreview] = useState<PluginEntry | null>(null)
   /** 确定性预检进行中的插件（按钮禁用防重复点击）。 */
   const [scanning, setScanning] = useState<PluginEntry | null>(null)
+  /** 插件判定结果：key = `${owner}/${repo}`。 */
+  const [pluginStatus, setPluginStatus] = useState<Record<string, 'plugin' | 'not'>>({})
+  /** 后台渐进判定进度。 */
+  const [scanProgress, setScanProgress] = useState<{ running: boolean; scanned: number; total: number; cached: boolean }>({ running: false, scanned: 0, total: 0, cached: false })
+  /** 「只看插件」开关。 */
+  const [onlyPlugins, setOnlyPlugins] = useState(false)
   /** GitHub 全文搜索兜底：本地过滤无结果时触发。null=未搜索；[]=已搜无结果。 */
   const [searchResults, setSearchResults] = useState<PluginEntry[] | null>(null)
   const [searching, setSearching] = useState(false)
@@ -723,9 +762,45 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
       .then((body: { plugins: InstalledVersion[] }) => setInstalledVersions(body.plugins ?? []))
       .catch(() => setInstalledVersions([]))
   }, [])
+  // 后台插件判定：拉状态 → 合并结果 + 更新进度；扫描未完成则每 2s 轮询
+  useEffect(() => {
+    let timer: number | undefined = undefined
+    let stopped = false
+    const poll = (): void => {
+      fetch('/dsh-discovery/plugin-status', { cache: 'no-store' })
+        .then((res) => { if (!res.ok) throw new Error('HTTP ' + String(res.status)); return res.json() })
+        .then((body: PluginScanState) => {
+          if (stopped) return
+          setPluginStatus(body.statuses ?? {})
+          setScanProgress({ running: body.running, scanned: body.scanned, total: body.total, cached: body.cached })
+          if (body.running) {
+            timer = window.setTimeout(poll, 2000)
+          } else if (timer === undefined && body.scanned === 0 && body.total > 0) {
+            // 扫描刚启动首轮：继续轮询直到 running=false
+            timer = window.setTimeout(poll, 2000)
+          }
+        })
+        .catch(() => {
+          if (stopped) return
+          // 网络/服务异常：10s 后重试，不阻塞列表
+          timer = window.setTimeout(poll, 10000)
+        })
+    }
+    poll()
+    return () => { stopped = true; window.clearTimeout(timer) }
+  }, [])
 
   const cats = useMemo(() => orderedCategories(listing), [listing])
-  const plugins = useMemo(() => filterPlugins(listing, { q, cat }), [listing, q, cat])
+  // 过滤（q + cat）后合并后台插件判定结果：isPlugin 从 pluginStatus 取，未判定为 null
+  const plugins = useMemo(() => {
+    return filterPlugins(listing, { q, cat }).map((p) => ({
+      ...p,
+      isPlugin: pluginStatus[`${p.owner}/${p.name}`] ?? null,
+    }))
+  }, [listing, q, cat, pluginStatus])
+  // 「只看插件」视图：主区只放已确认插件，未判定沉底待确认区（不占排序位）
+  const mainPlugins = onlyPlugins ? plugins.filter((p) => p.isPlugin === 'plugin') : plugins
+  const pendingPlugins = onlyPlugins ? plugins.filter((p) => p.isPlugin === null) : []
 
   // GitHub 全文搜索兜底：本地 topic 列表过滤无结果时，防抖触发在线搜索
   // （GitHub topic 索引对新仓库有延迟，搜名字也搜不到，需走全文搜索）。
@@ -804,7 +879,9 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
                 h('div', { style: onlineNoteStyle }, t('searchOnlineResults').replace('{n}', String(searchResults.length))),
                 h('div', { style: gridStyle },
                   searchResults.map((p) => h(PluginCard, {
-                    key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed), scanning: scanning !== null && scanning.htmlUrl === p.htmlUrl,
+                    key: p.htmlUrl,
+                    plugin: { ...p, isPlugin: pluginStatus[`${p.owner}/${p.name}`] ?? null },
+                    t, installed: isInstalled(p, installed), scanning: scanning !== null && scanning.htmlUrl === p.htmlUrl,
                     onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
                   })),
                 ),
@@ -820,12 +897,37 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
     ),
     tab === 'browse' && h('div', { style: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 } },
       h('p', { style: disclaimerStyle }, `⚠️ ${t('disclaimerBody')}`),
-      h('input', {
-        style: searchStyle,
-        placeholder: t('searchPh'),
-        value: q,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value),
-      }),
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+        h('input', {
+          style: { ...searchStyle, marginBottom: 0, flex: 1, minWidth: 200 },
+          placeholder: t('searchPh'),
+          value: q,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value),
+        }),
+        h('label', { style: filterToggleStyle, title: t('onlyPluginsTip') },
+          h('input', {
+            type: 'checkbox',
+            checked: onlyPlugins,
+            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setOnlyPlugins(e.target.checked),
+          }),
+          t('onlyPlugins'),
+        ),
+      ),
+      (scanProgress.running || scanProgress.total > 0) && h('div', { style: scanProgressStyle },
+        h('div', { style: scanBarTrackStyle },
+          h('div', {
+            style: {
+              ...scanBarFillStyle,
+              width: scanProgress.total > 0 ? `${Math.round((scanProgress.scanned / scanProgress.total) * 100)}%` : '0%',
+            },
+          }),
+        ),
+        h('span', { style: { whiteSpace: 'nowrap' } },
+          scanProgress.running
+            ? t('pluginScanProgress').replace('{n}', String(scanProgress.scanned)).replace('{total}', String(scanProgress.total))
+            : scanProgress.cached ? t('pluginScanCached') : t('pluginScanDone'),
+        ),
+      ),
       h('div', { style: catRowStyle },
         h('button', { style: cat === 'all' ? catOnStyle : catStyle, onClick: () => setCat('all') }, t('all')),
         cats.map((c) => h('button', {
@@ -840,12 +942,16 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
       h('div', { style: bodyStyle, flex: 1 },
         loadError && h('div', { style: emptyStyle }, t('loadFail') + ' — ' + t('refresh')),
         !loadError && listing === null && h('div', { style: loadingStyle }, t('loading')),
-        !loadError && listing !== null && plugins.length > 0 && h('div', { style: gridStyle },
-          plugins.map((p) => h(PluginCard, {
+        !loadError && listing !== null && mainPlugins.length > 0 && h('div', { style: gridStyle },
+          mainPlugins.map((p) => h(PluginCard, {
             key: p.htmlUrl, plugin: p, t, installed: isInstalled(p, installed), scanning: scanning !== null && scanning.htmlUrl === p.htmlUrl,
             onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
           })),
         ),
+        !loadError && listing !== null && onlyPlugins && pendingPlugins.length > 0 && h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary, #7c7c9c)', padding: '12px 0', borderTop: '1px dashed var(--dsw-alias-border-l2, #2e2e4a)' } },
+          t('pendingVerify').replace('{n}', String(pendingPlugins.length)),
+        ),
+        !loadError && listing !== null && onlyPlugins && mainPlugins.length === 0 && pendingPlugins.length === 0 && plugins.length > 0 && h('div', { style: emptyStyle }, t('noPluginFiltered')),
         !loadError && listing !== null && fallbackView,
         !loadError && listing !== null && plugins.length === 0 && q.trim() === '' && h('div', { style: emptyStyle }, t('empty')),
       ),
@@ -872,6 +978,7 @@ function toPluginEntry(v: InstalledVersion): PluginEntry {
     ownerType: null,
     repoCreatedAt: '',
     forks: 0,
+    isPlugin: null,
   }
 }
 

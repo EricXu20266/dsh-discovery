@@ -75,6 +75,17 @@ export const zh = {
   starAnomaly: '星数异常',
   starAnomalyTip: '星数/fork 比异常，疑似刷星。正常开源项目 fork 约为 star 的 5%~20%。',
   preScanning: '预检中…',
+  pluginBadge: '插件',
+  pluginBadgeTip: '已确认为 DSH 插件（package.json 含 dsh 字段或 cordis 依赖）',
+  notPluginBadge: '非插件',
+  notPluginBadgeTip: '已确认非 DSH 插件（无 dsh 字段且无 cordis 依赖）',
+  onlyPlugins: '只看插件',
+  onlyPluginsTip: '仅显示确认为 DSH 插件的仓库（后台扫描中，未确认的会沉底）',
+  pluginScanProgress: '插件确认中 {n}/{total}',
+  pluginScanCached: '插件判定已缓存',
+  pluginScanDone: '插件判定完成',
+  pendingVerify: '还有 {n} 个仓库待确认，确认后自动加入…',
+  noPluginFiltered: '当前条件下没有确认为插件的仓库',
 }
 
 export const en = {
@@ -152,4 +163,15 @@ export const en = {
   starAnomaly: 'Stars anomaly',
   starAnomalyTip: 'Star/fork ratio anomaly — suspected star farming. Healthy open-source repos fork ~5–20% of their stars.',
   preScanning: 'Pre-scanning…',
+  pluginBadge: 'Plugin',
+  pluginBadgeTip: 'Verified DSH plugin (dsh field or cordis dependency in package.json)',
+  notPluginBadge: 'Not a plugin',
+  notPluginBadgeTip: 'Verified NOT a DSH plugin (no dsh field, no cordis dependency)',
+  onlyPlugins: 'Plugins only',
+  onlyPluginsTip: 'Show only repos verified as DSH plugins (background scan; unverified ones sink to the bottom)',
+  pluginScanProgress: 'Verifying plugins {n}/{total}',
+  pluginScanCached: 'Plugin verdict cached',
+  pluginScanDone: 'Plugin verification done',
+  pendingVerify: '{n} repos pending verification — they will join automatically…',
+  noPluginFiltered: 'No verified plugins match the current filters',
 }

@@ -20,6 +20,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { sendJson } from './http.ts'
 import { scanRepositoryCached } from './security.ts'
+import { startPluginScan, type PluginScanState } from './plugin-check.ts'
 
 export interface WebServerService {
   register(route: {
@@ -54,6 +55,8 @@ export interface PluginEntry {
   repoCreatedAt: string
   /** fork 数（配合 stars 做刷星信号：star/fork 比异常 = 疑似刷星）。 */
   forks: number
+  /** 确定性插件判定（后台渐进扫描填充）：'plugin' | 'not' | null(未判定)。 */
+  isPlugin: 'plugin' | 'not' | null
 }
 
 export interface PluginListing {
@@ -92,6 +95,7 @@ function toPluginEntry(repo: GitHubRepo): PluginEntry {
     ownerType: repo.owner?.type === 'Organization' ? 'org' : repo.owner?.type === 'User' ? 'user' : null,
     repoCreatedAt: repo.created_at ?? '',
     forks: repo.forks_count ?? 0,
+    isPlugin: null,
   }
 }
 
@@ -110,18 +114,20 @@ async function fetchPage(page: number): Promise<GitHubRepo[]> {
   return body.items ?? []
 }
 
-/** Pull up to 10 pages (~300 repos). A failed page stops the fetch gracefully. */
+/**
+ * Pull up to 10 pages (~300 repos) concurrently. GitHub search API unauthenticated
+ * quota is 10 req/min — 10 pages in parallel sits exactly at that limit, and any
+ * failed page degrades to the pages that succeeded (serial version stopped at the
+ * first failure, losing the tail).
+ */
 export async function fetchListing(): Promise<PluginListing> {
   if (cache.data !== null && Date.now() - cache.at < TTL_MS) return cache.data
+  const results = await Promise.allSettled(
+    Array.from({ length: 10 }, (_, i) => fetchPage(i + 1)),
+  )
   const all: GitHubRepo[] = []
-  for (let page = 1; page <= 10; page += 1) {
-    try {
-      const items = await fetchPage(page)
-      if (items.length === 0) break
-      all.push(...items)
-    } catch {
-      break // transient GitHub errors: serve what we have
-    }
+  for (const result of results) {
+    if (result.status === 'fulfilled') all.push(...result.value)
   }
   const plugins: PluginEntry[] = all.map(toPluginEntry)
   const listing: PluginListing = {
@@ -497,6 +503,22 @@ export function mountDiscoveryRoutes(host: DiscoveryHost, listInstalled: () => s
           sendJson(response, 200, { markdown })
         } catch (error) {
           sendJson(response, 404, {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      },
+    }),
+    host.webServer.register({
+      kind: 'exact',
+      path: '/dsh-discovery/plugin-status',
+      handler: async (_request, response) => {
+        try {
+          // 拉 listing（TTL 缓存命中，不触发重拉）→ 用其插件列表启动/继续后台判定
+          const listing = await fetchListing()
+          const state = await startPluginScan(listing.plugins.map((p) => ({ owner: p.owner, repo: p.name })))
+          sendJson(response, 200, state satisfies PluginScanState)
+        } catch (error) {
+          sendJson(response, 500, {
             error: error instanceof Error ? error.message : String(error),
           })
         }

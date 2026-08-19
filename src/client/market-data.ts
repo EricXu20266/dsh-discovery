@@ -15,6 +15,8 @@ export interface PluginEntry {
   repoCreatedAt: string
   /** fork 数（star/fork 比异常 = 疑似刷星）。 */
   forks: number
+  /** 确定性插件判定（后台渐进扫描填充）：'plugin' | 'not' | null(未判定)。 */
+  isPlugin: 'plugin' | 'not' | null
 }
 
 export interface PluginListing {
