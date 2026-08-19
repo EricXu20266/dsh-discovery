@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
-  fetchListing, getCachedListing, mountDiscoveryRoutes,
+  fetchListing, fetchSearch, getCachedListing, mountDiscoveryRoutes,
   type DiscoveryHost, type PluginEntry,
 } from './routes.ts'
 import { scanRepositoryCached } from './security.ts'
@@ -125,23 +125,30 @@ export function apply(ctx: Context): void {
         render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
       },
       async execute(args) {
-        const listing = await fetchListing()
         const q = (args.query ?? '').trim().toLowerCase()
         const limit = Math.min(args.limit ?? 20, 50)
         const verdicts = getPluginScanStateSync().statuses
-        const matched = listing.plugins
+        // 本地 topic 列表（top 300，star 排序）过滤
+        const listing = await fetchListing()
+        const local = listing.plugins
           .filter((p) => q === '' || `${p.name} ${p.owner} ${p.description}`.toLowerCase().includes(q))
-          .slice(0, limit)
-          .map((p) => ({
-            name: p.name,
-            owner: p.owner,
-            stars: p.stars,
-            isPlugin: verdicts[`${p.owner}/${p.name}`] ?? 'unknown',
-            ownerType: p.ownerType ?? 'unknown',
-            description: (p.description ?? '').slice(0, 120),
-            htmlUrl: p.htmlUrl,
-          }))
-        return { total: matched.length, plugins: matched }
+        // 兜底：本地无结果且有关键词 → GitHub 全文搜索（不限定 topic，命中 0-star 新插件/未收录仓库）
+        let matched = local
+        if (local.length === 0 && q !== '') {
+          const search = await fetchSearch(q)
+          if (search !== null) matched = search
+        }
+        const compact = (p: PluginEntry): { name: string; owner: string; stars: number; isPlugin: string; ownerType: string; description: string; htmlUrl: string } => ({
+          name: p.name,
+          owner: p.owner,
+          stars: p.stars,
+          isPlugin: verdicts[`${p.owner}/${p.name}`] ?? 'unknown',
+          ownerType: p.ownerType ?? 'unknown',
+          description: (p.description ?? '').slice(0, 120),
+          htmlUrl: p.htmlUrl,
+        })
+        const plugins = matched.slice(0, limit).map(compact)
+        return { total: plugins.length, plugins }
       },
     }))
     tools.register(defineTool({

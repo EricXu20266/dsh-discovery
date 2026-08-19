@@ -159,10 +159,11 @@ const SEARCH_TTL_MS = 5 * 60 * 1000
 
 /**
  * GitHub 全文搜索兜底：topic 列表索引对新仓库有延迟（topic 已打但未收录），
+ * 且 0-star 新仓库排在 7676 个 topic 仓库的 star 排序末尾（listing 只拉前 300）。
  * 本地过滤无结果时走 search API 全文匹配 name/description/readme。
- * 不限定 topic，才能命中最新仓库。失败返回 null（区别于"无结果"的 []）。
+ * 不限定 topic，才能命中最新仓库与低 star 插件。失败返回 null（区别于"无结果"的 []）。
  */
-async function fetchSearch(q: string): Promise<PluginEntry[] | null> {
+export async function fetchSearch(q: string): Promise<PluginEntry[] | null> {
   const key = q.trim().toLowerCase()
   if (key === '') return []
   const cached = searchCache.get(key)
