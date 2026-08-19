@@ -145,6 +145,11 @@ export function invalidateListing(): void {
   cache = { at: 0, data: null }
 }
 
+/** 同步读当前 listing 缓存（供 system prompt 摘要等同步场景；无缓存返回 null）。 */
+export function getCachedListing(): PluginListing | null {
+  return cache.data
+}
+
 /* ── GitHub full-text search fallback ─────────────────────────────────────── */
 
 /** 全文搜索缓存：关键词 → 结果（null = 查询失败）。TTL 防未认证 API 限流（60 req/h）。 */

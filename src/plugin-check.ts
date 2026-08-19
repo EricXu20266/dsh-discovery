@@ -125,16 +125,38 @@ let scanPromise: Promise<void> | null = null
 /** 网络失败冷却表：key → 失败时间戳（unknown 不写盘，冷却期内不重试）。 */
 const failedAt = new Map<string, number>()
 
+function ensureCacheLoaded(): void {
+  if (cacheLoaded) return
+  state.statuses = loadCache()
+  state.cached = Object.keys(state.statuses).length > 0
+  cacheLoaded = true
+}
+
+/** 同步读当前判定状态（供 system prompt 摘要等同步场景，确保磁盘缓存已加载）。 */
+export function getPluginScanStateSync(): PluginScanState {
+  ensureCacheLoaded()
+  return state
+}
+
+/** 同步读已判定的插件判定统计（key 计数，供摘要）。 */
+export function getPluginVerdictCounts(): { plugins: number; notPlugins: number; unknown: number } {
+  let plugins = 0
+  let notPlugins = 0
+  let unknown = 0
+  for (const kind of Object.values(state.statuses)) {
+    if (kind === 'plugin') plugins += 1
+    else if (kind === 'not') notPlugins += 1
+    else unknown += 1
+  }
+  return { plugins, notPlugins, unknown }
+}
+
 /**
  * 启动/继续后台插件判定扫描。首次调用加载磁盘缓存；已有扫描在跑则复用。
  * 返回当前状态快照（调用方轮询即可）。
  */
 export async function startPluginScan(entries: Array<{ owner: string; repo: string }>): Promise<PluginScanState> {
-  if (!cacheLoaded) {
-    state.statuses = loadCache()
-    state.cached = Object.keys(state.statuses).length > 0
-    cacheLoaded = true
-  }
+  ensureCacheLoaded()
   const now = Date.now()
   // 过滤出未判定且不在网络失败冷却期的
   const pendingKeys = entries
