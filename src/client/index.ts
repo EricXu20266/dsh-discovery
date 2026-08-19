@@ -232,12 +232,12 @@ const toggleKnobStyle: React.CSSProperties = {
 }
 const toggleKnobOnStyle: React.CSSProperties = { ...toggleKnobStyle, left: 20 }
 const settingRowStyle: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
+  display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px',
   background: 'var(--dsw-alias-bg-layer-2, #1c1c2e)', borderRadius: 10,
-  border: '1px solid var(--dsw-alias-border-l2, #2e2e4a)', marginBottom: 8,
+  border: '1px solid var(--dsw-alias-border-l2, #2e2e4a)', minWidth: 0,
 }
 const settingTitleStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #e0e0f0)' }
-const settingDescStyle: React.CSSProperties = { fontSize: 11, lineHeight: '15px', color: 'var(--dsw-alias-label-secondary, #7c7c9c)', marginTop: 2 }
+const settingDescStyle: React.CSSProperties = { fontSize: 11, lineHeight: '16px', color: 'var(--dsw-alias-label-secondary, #7c7c9c)' }
 
 /** 无障碍 toggle switch（纯 CSS 滑块，无外部依赖）。 */
 function Toggle({ checked, onChange, title }: { checked: boolean; onChange: (v: boolean) => void; title?: string }) {
@@ -248,7 +248,7 @@ function Toggle({ checked, onChange, title }: { checked: boolean; onChange: (v: 
   }, h('span', { style: checked ? toggleKnobOnStyle : toggleKnobStyle }))
 }
 
-/** 设置行：标题 + 说明 + 右侧滑块。 */
+/** 设置行：标题行（右侧滑块）+ 整行说明。 */
 function SettingRow({ title, desc, checked, onChange }: {
   title: string
   desc: string
@@ -256,11 +256,11 @@ function SettingRow({ title, desc, checked, onChange }: {
   onChange: (v: boolean) => void
 }) {
   return h('div', { style: settingRowStyle },
-    h('div', { style: { minWidth: 0, flex: 1 } },
+    h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
       h('div', { style: settingTitleStyle }, title),
-      h('div', { style: settingDescStyle }, desc),
+      h('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center' } }, h(Toggle, { checked, onChange, title })),
     ),
-    h(Toggle, { checked, onChange, title }),
+    h('div', { style: settingDescStyle }, desc),
   )
 }
 /** 插件确认进度条（一行轻量提示）。 */
@@ -966,7 +966,7 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
         value: q,
         onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value),
       }),
-      h('div', { style: { marginBottom: 10 } },
+      h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 8, marginBottom: 10 } },
         h(SettingRow, {
           title: t('onlyPlugins'),
           desc: t('onlyPluginsDesc'),
