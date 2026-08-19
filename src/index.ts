@@ -22,6 +22,7 @@ import {
 } from './routes.ts'
 import { scanRepositoryCached } from './security.ts'
 import { getPluginScanStateSync, getPluginVerdictCounts } from './plugin-check.ts'
+import { readSettings } from './settings.ts'
 
 export const name = 'dsh-discovery'
 
@@ -55,8 +56,12 @@ function listInstalledPlugins(): string[] {
   }
 }
 
-/** 机制 A：每次 system prompt 组装时实时求值的生态摘要（同步读缓存，~200 token）。 */
+/** 机制 A：每次 system prompt 组装时实时求值的生态摘要（同步读缓存，~200 token）。
+ *  受 settings.aiSummaryEnabled 开关控制（默认开）；关闭时只保留一行最小提示（省 token）。 */
 function renderDiscoverySummary(): string {
+  if (!readSettings().aiSummaryEnabled) {
+    return 'Installed plugin: dsh-discovery — DSH 社区插件搜索器（生态摘要已关闭）。可用 dsh_discovery_search / dsh_discovery_audit 工具按需查询。'
+  }
   const installed = listInstalledPlugins()
   const verdicts = getPluginVerdictCounts()
   const listing = getCachedListing()

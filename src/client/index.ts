@@ -214,11 +214,54 @@ const badgeNotPluginStyle: React.CSSProperties = {
   color: '#9ca3af', padding: '1px 7px', borderRadius: 999, lineHeight: '16px',
   border: '1px solid currentColor', flexShrink: 0,
 }
-/** 「只看插件」开关样式。 */
-const filterToggleStyle: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
-  fontSize: 12, color: 'var(--dsw-alias-label-secondary, #9aa0b4)',
-  userSelect: 'none', marginBottom: 10,
+/* ── toggle switch（滑块）────────────────────────────────────────────────── */
+const toggleStyle: React.CSSProperties = {
+  position: 'relative', width: 38, height: 22, borderRadius: 11, flexShrink: 0, cursor: 'pointer',
+  background: 'var(--dsw-alias-bg-layer-2, #2a2a4a)',
+  border: '1px solid var(--dsw-alias-border-l2, #3a3a5a)', padding: 0,
+  transition: 'background-color .2s ease, border-color .2s ease',
+}
+const toggleOnStyle: React.CSSProperties = {
+  ...toggleStyle,
+  background: 'var(--dsw-static-deepseek-500, #4176E6)',
+  borderColor: 'var(--dsw-static-deepseek-500, #4176E6)',
+}
+const toggleKnobStyle: React.CSSProperties = {
+  position: 'absolute', top: 2, left: 2, width: 16, height: 16, borderRadius: '50%',
+  background: '#fff', transition: 'left .2s ease',
+}
+const toggleKnobOnStyle: React.CSSProperties = { ...toggleKnobStyle, left: 20 }
+const settingRowStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
+  background: 'var(--dsw-alias-bg-layer-2, #1c1c2e)', borderRadius: 10,
+  border: '1px solid var(--dsw-alias-border-l2, #2e2e4a)', marginBottom: 8,
+}
+const settingTitleStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-primary, #e0e0f0)' }
+const settingDescStyle: React.CSSProperties = { fontSize: 11, lineHeight: '15px', color: 'var(--dsw-alias-label-secondary, #7c7c9c)', marginTop: 2 }
+
+/** 无障碍 toggle switch（纯 CSS 滑块，无外部依赖）。 */
+function Toggle({ checked, onChange, title }: { checked: boolean; onChange: (v: boolean) => void; title?: string }) {
+  return h('button', {
+    type: 'button', role: 'switch', 'aria-checked': checked,
+    style: checked ? toggleOnStyle : toggleStyle, title,
+    onClick: (e: React.MouseEvent) => { e.stopPropagation(); onChange(!checked) },
+  }, h('span', { style: checked ? toggleKnobOnStyle : toggleKnobStyle }))
+}
+
+/** 设置行：标题 + 说明 + 右侧滑块。 */
+function SettingRow({ title, desc, checked, onChange }: {
+  title: string
+  desc: string
+  checked: boolean
+  onChange: (v: boolean) => void
+}) {
+  return h('div', { style: settingRowStyle },
+    h('div', { style: { minWidth: 0, flex: 1 } },
+      h('div', { style: settingTitleStyle }, title),
+      h('div', { style: settingDescStyle }, desc),
+    ),
+    h(Toggle, { checked, onChange, title }),
+  )
 }
 /** 插件确认进度条（一行轻量提示）。 */
 const scanProgressStyle: React.CSSProperties = {
@@ -718,6 +761,8 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   const [scanProgress, setScanProgress] = useState<{ running: boolean; scanned: number; total: number; cached: boolean }>({ running: false, scanned: 0, total: 0, cached: false })
   /** 「只看插件」开关。 */
   const [onlyPlugins, setOnlyPlugins] = useState(false)
+  /** AI 生态摘要开关（host 持久化，默认开）。 */
+  const [aiSummary, setAiSummary] = useState(true)
   /** GitHub 全文搜索兜底：本地过滤无结果时触发。null=未搜索；[]=已搜无结果。 */
   const [searchResults, setSearchResults] = useState<PluginEntry[] | null>(null)
   const [searching, setSearching] = useState(false)
@@ -789,6 +834,24 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
     poll()
     return () => { stopped = true; window.clearTimeout(timer) }
   }, [])
+  // AI 生态摘要开关：读 host 设置（默认开）
+  useEffect(() => {
+    fetch('/dsh-discovery/settings', { cache: 'no-store' })
+      .then((res) => { if (!res.ok) return null; return res.json() })
+      .then((body: { aiSummaryEnabled?: boolean } | null) => {
+        if (body !== null && typeof body.aiSummaryEnabled === 'boolean') setAiSummary(body.aiSummaryEnabled)
+      })
+      .catch(() => { /* 读设置失败保持默认开 */ })
+  }, [])
+  const handleAiSummaryToggle = (v: boolean): void => {
+    setAiSummary(v)
+    void fetch('/dsh-discovery/settings', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ aiSummaryEnabled: v }),
+      cache: 'no-store',
+    }).catch(() => { /* 写失败：UI 状态已更新，下次打开读盘回退 */ })
+  }
 
   const cats = useMemo(() => orderedCategories(listing), [listing])
   // 过滤（q + cat）后合并后台插件判定结果：isPlugin 从 pluginStatus 取，未判定/unknown 为 null
@@ -897,21 +960,25 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
     ),
     tab === 'browse' && h('div', { style: { height: '100%', display: 'flex', flexDirection: 'column', minWidth: 0 } },
       h('p', { style: disclaimerStyle }, `⚠️ ${t('disclaimerBody')}`),
-      h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
-        h('input', {
-          style: { ...searchStyle, marginBottom: 0, flex: 1, minWidth: 200 },
-          placeholder: t('searchPh'),
-          value: q,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value),
+      h('input', {
+        style: searchStyle,
+        placeholder: t('searchPh'),
+        value: q,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setQ(e.target.value),
+      }),
+      h('div', { style: { marginBottom: 10 } },
+        h(SettingRow, {
+          title: t('onlyPlugins'),
+          desc: t('onlyPluginsDesc'),
+          checked: onlyPlugins,
+          onChange: setOnlyPlugins,
         }),
-        h('label', { style: filterToggleStyle, title: t('onlyPluginsTip') },
-          h('input', {
-            type: 'checkbox',
-            checked: onlyPlugins,
-            onChange: (e: React.ChangeEvent<HTMLInputElement>) => setOnlyPlugins(e.target.checked),
-          }),
-          t('onlyPlugins'),
-        ),
+        h(SettingRow, {
+          title: t('aiSummaryToggle'),
+          desc: t('aiSummaryDesc'),
+          checked: aiSummary,
+          onChange: handleAiSummaryToggle,
+        }),
       ),
       (scanProgress.running || scanProgress.total > 0) && h('div', { style: scanProgressStyle },
         h('div', { style: scanBarTrackStyle },

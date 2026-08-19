@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { sendJson } from './http.ts'
 import { scanRepositoryCached } from './security.ts'
 import { startPluginScan, type PluginScanState } from './plugin-check.ts'
+import { readSettings, writeSettings } from './settings.ts'
 
 export interface WebServerService {
   register(route: {
@@ -522,6 +523,31 @@ export function mountDiscoveryRoutes(host: DiscoveryHost, listInstalled: () => s
           const listing = await fetchListing()
           const state = await startPluginScan(listing.plugins.map((p) => ({ owner: p.owner, repo: p.name })))
           sendJson(response, 200, state satisfies PluginScanState)
+        } catch (error) {
+          sendJson(response, 500, {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      },
+    }),
+    host.webServer.register({
+      kind: 'exact',
+      path: '/dsh-discovery/settings',
+      handler: async (request, response) => {
+        try {
+          if (request.method === 'PUT' || request.method === 'POST') {
+            const chunks: Buffer[] = []
+            for await (const chunk of request) chunks.push(chunk as Buffer)
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { aiSummaryEnabled?: unknown }
+            const settings = writeSettings({
+              aiSummaryEnabled: typeof body.aiSummaryEnabled === 'boolean'
+                ? body.aiSummaryEnabled
+                : undefined,
+            })
+            sendJson(response, 200, settings)
+            return
+          }
+          sendJson(response, 200, readSettings())
         } catch (error) {
           sendJson(response, 500, {
             error: error instanceof Error ? error.message : String(error),
