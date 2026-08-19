@@ -6,6 +6,8 @@ DSH community plugin discovery browser — a read-only tool for browsing and sea
 
 > **Core positioning: two-layer defense — deterministic pre-scan + LLM-audited install.** DHS currently has no official plugin marketplace, and any third-party plugin is essentially "executable code". This tool is therefore deliberately **read-only**, with a two-layer security model: the **code layer** runs static-rule deterministic pre-scans (collecting factual signals, never passing judgment), and the **model layer** lets the LLM (DHS's agent) do a deep audit anchored on that report (reading source, inspecting dependencies, identifying malicious patterns) before installing.
 
+> ⚠️ **Disclaimer: preventive measures ≠ security guarantee.** This tool's filtering, deterministic pre-scan, and LLM audit are all **preventive measures** — they cannot exhaustively catch every malicious behavior. For every defense, there is a bypass. Third-party plugins are, at heart, code that can perform arbitrary operations on your machine. **Stay vigilant before installing: don't casually install plugins from unknown sources, don't hand sensitive information (API keys, secrets, personal data) to plugins, and watch for abnormal behavior after installation.** By using this tool you acknowledge and accept the associated risks.
+
 ---
 
 ## Why "deterministic pre-scan + LLM audit"
