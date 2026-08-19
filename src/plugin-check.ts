@@ -22,11 +22,13 @@ const FETCH_TIMEOUT_MS = 10000
 const SCAN_CONCURRENCY = 8
 /** 磁盘缓存有效期（24h）。 */
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
+/** 网络失败后的重试冷却（10min）——unknown 不写盘，冷却期内不重复扫描。 */
+const RETRY_COOLDOWN_MS = 10 * 60 * 1000
 
-export type PluginKind = 'plugin' | 'not'
+export type PluginKind = 'plugin' | 'not' | 'unknown'
 
 export interface PluginScanState {
-  /** 判定结果：key = `${owner}/${repo}` → 'plugin' | 'not'。拉不到 package.json 记 'not'。 */
+  /** 判定结果：key = `${owner}/${repo}` → 'plugin' | 'not'。网络失败记 'unknown'（不写盘）。 */
   statuses: Record<string, PluginKind>
   scanned: number
   total: number
@@ -53,22 +55,29 @@ export function isDshPlugin(pkgText: string): boolean {
   }
 }
 
+type RawResult =
+  | { ok: true; text: string }
+  | { ok: false; notFound: boolean }
+
 /** raw 拉根目录 package.json（main/master 分支探测，纯 raw 不耗 API 配额）。 */
-async function fetchRawPackageJson(owner: string, repo: string): Promise<string | null> {
+async function fetchRawPackageJson(owner: string, repo: string): Promise<RawResult> {
+  let networkFailure = false
   for (const branch of ['main', 'master']) {
     try {
       const res = await fetch(`${RAW_BASE}/${owner}/${repo}/${branch}/package.json`, {
         headers: { 'user-agent': 'dsh-discovery' },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       })
-      if (res.ok) return await res.text()
+      if (res.ok) return { ok: true, text: await res.text() }
       if (res.status === 404) continue
-      return null
+      return { ok: false, notFound: false }
     } catch {
+      networkFailure = true
       // 超时/网络错误：尝试另一个分支
     }
   }
-  return null
+  if (networkFailure) return { ok: false, notFound: false }
+  return { ok: false, notFound: true }
 }
 
 /** 当前激活 profile 名（与 host 侧一致：argv --profile）。 */
@@ -113,6 +122,8 @@ function writeCache(statuses: Record<string, PluginKind>): void {
 const state: PluginScanState = { statuses: {}, scanned: 0, total: 0, running: false, cached: false }
 let cacheLoaded = false
 let scanPromise: Promise<void> | null = null
+/** 网络失败冷却表：key → 失败时间戳（unknown 不写盘，冷却期内不重试）。 */
+const failedAt = new Map<string, number>()
 
 /**
  * 启动/继续后台插件判定扫描。首次调用加载磁盘缓存；已有扫描在跑则复用。
@@ -124,10 +135,11 @@ export async function startPluginScan(entries: Array<{ owner: string; repo: stri
     state.cached = Object.keys(state.statuses).length > 0
     cacheLoaded = true
   }
-  // 过滤出未判定的
+  const now = Date.now()
+  // 过滤出未判定且不在网络失败冷却期的
   const pendingKeys = entries
     .map((e) => `${e.owner}/${e.repo}`)
-    .filter((k) => !(k in state.statuses))
+    .filter((k) => !(k in state.statuses) && (failedAt.get(k) ?? 0) + RETRY_COOLDOWN_MS <= now)
   if (pendingKeys.length === 0) {
     state.running = false
     state.scanned = 0
@@ -150,8 +162,16 @@ export async function startPluginScan(entries: Array<{ owner: string; repo: stri
         const key = keys[cursor]!
         cursor += 1
         const parts = key.split('/')
-        const text = await fetchRawPackageJson(parts[0]!, parts[1]!)
-        state.statuses[key] = text !== null && isDshPlugin(text) ? 'plugin' : 'not'
+        const result = await fetchRawPackageJson(parts[0]!, parts[1]!)
+        if (result.ok) {
+          state.statuses[key] = isDshPlugin(result.text) ? 'plugin' : 'not'
+        } else if (result.notFound) {
+          // 仓库不存在 / 无 package.json：确定性「非插件」
+          state.statuses[key] = 'not'
+        } else {
+          // 网络失败：不写盘、不固化，进入冷却期
+          failedAt.set(key, Date.now())
+        }
         state.scanned += 1
       }
     })

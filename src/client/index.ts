@@ -712,8 +712,8 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   const [preview, setPreview] = useState<PluginEntry | null>(null)
   /** 确定性预检进行中的插件（按钮禁用防重复点击）。 */
   const [scanning, setScanning] = useState<PluginEntry | null>(null)
-  /** 插件判定结果：key = `${owner}/${repo}`。 */
-  const [pluginStatus, setPluginStatus] = useState<Record<string, 'plugin' | 'not'>>({})
+  /** 插件判定结果：key = `${owner}/${repo}`。'unknown'=网络失败（视同未判定）。 */
+  const [pluginStatus, setPluginStatus] = useState<Record<string, 'plugin' | 'not' | 'unknown'>>({})
   /** 后台渐进判定进度。 */
   const [scanProgress, setScanProgress] = useState<{ running: boolean; scanned: number; total: number; cached: boolean }>({ running: false, scanned: 0, total: 0, cached: false })
   /** 「只看插件」开关。 */
@@ -791,12 +791,12 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
   }, [])
 
   const cats = useMemo(() => orderedCategories(listing), [listing])
-  // 过滤（q + cat）后合并后台插件判定结果：isPlugin 从 pluginStatus 取，未判定为 null
+  // 过滤（q + cat）后合并后台插件判定结果：isPlugin 从 pluginStatus 取，未判定/unknown 为 null
   const plugins = useMemo(() => {
-    return filterPlugins(listing, { q, cat }).map((p) => ({
-      ...p,
-      isPlugin: pluginStatus[`${p.owner}/${p.name}`] ?? null,
-    }))
+    return filterPlugins(listing, { q, cat }).map((p) => {
+      const kind = pluginStatus[`${p.owner}/${p.name}`]
+      return { ...p, isPlugin: kind === 'plugin' || kind === 'not' ? kind : null }
+    })
   }, [listing, q, cat, pluginStatus])
   // 「只看插件」视图：主区只放已确认插件，未判定沉底待确认区（不占排序位）
   const mainPlugins = onlyPlugins ? plugins.filter((p) => p.isPlugin === 'plugin') : plugins
@@ -880,7 +880,7 @@ function DiscoveryBrowser({ t, ctx, onClose, onFetched }: {
                 h('div', { style: gridStyle },
                   searchResults.map((p) => h(PluginCard, {
                     key: p.htmlUrl,
-                    plugin: { ...p, isPlugin: pluginStatus[`${p.owner}/${p.name}`] ?? null },
+                    plugin: { ...p, isPlugin: pluginStatus[`${p.owner}/${p.name}`] === 'plugin' || pluginStatus[`${p.owner}/${p.name}`] === 'not' ? pluginStatus[`${p.owner}/${p.name}`] : null },
                     t, installed: isInstalled(p, installed), scanning: scanning !== null && scanning.htmlUrl === p.htmlUrl,
                     onReview: handleReview, onViewRepo: (x) => setPreview(x), onCheckUpdate: handleCheckUpdate,
                   })),
