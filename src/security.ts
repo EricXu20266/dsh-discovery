@@ -392,8 +392,9 @@ export async function scanRepository(owner: string, repo: string): Promise<Secur
           detail: '插件通常依赖较少。大量依赖增大供应链投毒面，请核对依赖清单。',
         })
       }
-      // 2d) typosquatting
+      // 2d) typosquatting（排除 @types/*——DefinitelyTyped 官方类型包，与核心包编辑距离恰好 ≤2 属正常）
       for (const dep of deps) {
+        if (dep.startsWith('@types/')) continue
         const near = nearCorePackage(dep)
         if (near !== null) {
           signals.push({
